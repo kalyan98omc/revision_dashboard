@@ -1,0 +1,1 @@
+const fs = require('fs'); const src = fs.readFileSync('admin-page.jsx', 'utf8'); let depth=0; const lines=src.split('\n'); for(let i=260; i<337; i++){ const l=lines[i]; for(let j=0; j<l.length; j++){ if(l[j]==='{') depth++; if(l[j]==='}') depth--; } console.log(i+1, depth); }
