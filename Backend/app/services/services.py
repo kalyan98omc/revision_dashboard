@@ -503,9 +503,13 @@ class ChatService:
         session_id: str,
         user_id: str,
         user_message: str,
+        use_rag: bool = True,
+        custom_system_prompt: Optional[str] = None,
     ) -> Generator[str, None, None]:
         """
         Yields text chunks for Server-Sent Events or SocketIO streaming.
+        Uses the OpenAI Assistants API (with file_search tool) to retrieve
+        relevant content from the OpenAI Vector Store (RAG) and stream replies.
         Saves user message and full assistant response to DB on completion.
         """
         session = ChatRepository.get_session(session_id, user_id)
@@ -527,43 +531,131 @@ class ChatService:
             content=clean_message,
         )
 
-        # Build message history for context window
+        # Build message history — only user/assistant turns for the thread
         history = ChatRepository.get_recent_messages(session_id, limit=20)
-        openai_messages = [
+        thread_messages = [
             {"role": m.role.value, "content": m.content}
             for m in history
+            if m.role in (MessageRole.USER, MessageRole.ASSISTANT)
         ]
 
         # Stream from OpenAI
         full_response = ""
         token_count = 0
-        finish_reason = None
+        finish_reason = "stop"
 
         try:
             import openai
-            client = openai.OpenAI(api_key=current_app.config["OPENAI_API_KEY"])
+            
+            # ── Validate API Key ──
+            api_key = current_app.config.get("OPENAI_API_KEY", "").strip()
+            if not api_key:
+                log.error("openai.missing_api_key")
+                yield "OpenAI API key is not configured. Please contact admin."
+                return
+            
+            client = openai.OpenAI(api_key=api_key)
 
-            stream = client.chat.completions.create(
-                model=current_app.config["OPENAI_MODEL"],
-                messages=openai_messages,
-                max_tokens=current_app.config["OPENAI_MAX_TOKENS"],
-                temperature=current_app.config["OPENAI_TEMPERATURE"],
-                stream=True,
-            )
+            if use_rag:
+                # ── Assistants API path: uses file_search on the OpenAI Vector Store ──
+                from app.services.admin_service import AdminService
 
-            for chunk in stream:
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    full_response += delta.content
-                    yield delta.content
-                if chunk.choices[0].finish_reason:
-                    finish_reason = chunk.choices[0].finish_reason
+                try:
+                    assistant_id = AdminService._ensure_assistant()
+                except Exception as e:
+                    log.error("openai.assistant_initialization_failed", error=str(e), session_id=session_id)
+                    yield "Could not initialize AI assistant. Please try again."
+                    return
+                
+                system_instructions = custom_system_prompt or ChatService._build_system_prompt(session.subject_id)
+
+                # Attach subject-specific vector store to the thread to allow RAG
+                tool_resources = None
+                if session.subject_id:
+                    from app.services.rag_service import RAGService
+                    try:
+                        subject_vs_id = RAGService().get_or_create_vector_store(session.subject_id)
+                        if subject_vs_id:
+                            tool_resources = {
+                                "file_search": {
+                                    "vector_store_ids": [subject_vs_id]
+                                }
+                            }
+                    except Exception as e:
+                        log.warning("openai.vector_store_retrieval_failed", error=str(e), session_id=session_id)
+
+                # Create a thread with the full conversation history
+                try:
+                    thread_params = {"messages": thread_messages}
+                    if tool_resources:
+                        thread_params["tool_resources"] = tool_resources
+                        
+                    thread = client.beta.threads.create(**thread_params)
+                except Exception as e:
+                    log.error("openai.thread_creation_failed", error=str(e), session_id=session_id)
+                    yield "Could not create conversation thread. Please try again."
+                    return
+
+                try:
+                    # Stream the assistant run
+                    with client.beta.threads.runs.stream(
+                        thread_id=thread.id,
+                        assistant_id=assistant_id,
+                        instructions=system_instructions,
+                        tool_choice={"type": "file_search"},
+                    ) as stream:
+                        for event in stream:
+                            if event.event == "thread.message.delta":
+                                for block in (event.data.delta.content or []):
+                                    if block.type == "text" and block.text and block.text.value:
+                                        chunk = block.text.value
+                                        full_response += chunk
+                                        yield chunk
+                            elif event.event == "thread.run.completed":
+                                finish_reason = "stop"
+                            elif event.event == "thread.run.failed":
+                                finish_reason = "error"
+                except Exception as e:
+                    log.error("openai.stream_run_failed", error=str(e), session_id=session_id)
+                    yield "AI response failed. Please try again."
+                finally:
+                    # Clean up thread — ignore errors
+                    try:
+                        client.beta.threads.delete(thread.id)
+                    except Exception:
+                        pass
+
+            else:
+                # ── Fallback: standard chat completions (no file_search / RAG) ──
+                try:
+                    openai_messages = [
+                        {"role": m.role.value, "content": m.content}
+                        for m in history
+                    ]
+                    stream = client.chat.completions.create(
+                        model=current_app.config["OPENAI_MODEL"],
+                        messages=openai_messages,
+                        max_tokens=current_app.config["OPENAI_MAX_TOKENS"],
+                        temperature=current_app.config["OPENAI_TEMPERATURE"],
+                        stream=True,
+                    )
+                    for chunk in stream:
+                        delta = chunk.choices[0].delta
+                        if delta.content:
+                            full_response += delta.content
+                            yield delta.content
+                        if chunk.choices[0].finish_reason:
+                            finish_reason = chunk.choices[0].finish_reason
+                except Exception as e:
+                    log.error("openai.chat_completion_failed", error=str(e), session_id=session_id)
+                    yield "Chat completion failed. Please try again."
+                    return
 
             # Approximate token count
             token_count = len(full_response.split()) * 1.3
 
         except Exception as e:
-            log.error("openai.stream_error", error=str(e), session_id=session_id)
+            log.error("openai.stream_error", error=str(e), error_type=type(e).__name__, session_id=session_id)
             fallback = "I'm having trouble connecting to the AI service right now. Please try again in a moment."
             full_response = fallback
             yield fallback

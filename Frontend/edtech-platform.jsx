@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
 import { StudentOnboarding, StudyPlanView, TopicAssessmentView, RevisionDashboard } from "./neetpg-pages.jsx";
 import AdminPanel from "./admin-page.jsx";
+import AiTutorPage from "./ai-tutor.jsx";
 // ─── THEME CONTEXT ───────────────────────────────────────────────────────────
 const ThemeContext = createContext(null);
 
@@ -532,7 +533,36 @@ const styles = `
 
   /* Responsive helpers */
   @media (max-width: 1100px) { .stats-grid { grid-template-columns: repeat(2,1fr); } }
-  @media (max-width: 768px) { .stats-grid { grid-template-columns: 1fr; } .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+  @media (max-width: 768px) { 
+    .stats-grid { grid-template-columns: 1fr; } 
+    .grid-2, .grid-3 { grid-template-columns: 1fr; } 
+    .app { flex-direction: column-reverse; } /* Sidebar goes to bottom on mobile! */
+    .sidebar { width: 100%; height: 60px; padding: 0 10px; border-right: none; border-top: 1px solid var(--border); flex-direction: row; justify-content: space-around; z-index: 50; }
+    .sidebar.expanded { width: 100%; align-items: center; padding: 0 10px; }
+    .logo-wrap, .nav-divider, .sidebar-bottom, .badge { display: none !important; }
+    .nav-item { width: auto; flex: 1; flex-direction: column; gap: 4px; border-radius: 8px; margin: 0; padding: 4px; }
+    .nav-item .nav-label { font-size: 10px; }
+    .topbar { padding: 0 16px; }
+    .topbar-title { font-size: 16px; }
+    .search-box { display: none; }
+    .content { padding: 16px; }
+    .stat-value { font-size: 24px; }
+    .quiz-layout { flex-direction: column; }
+    .quiz-list-panel { width: 100%; }
+    .result-score { font-size: 60px; }
+    .result-grid { grid-template-columns: 1fr; }
+    .chat-layout { flex-direction: column; }
+    .chat-sidebar { width: 100%; max-height: 35vh; border-right: none; border-bottom: 1px solid var(--border); }
+    .chat-topbar { padding: 12px 16px; }
+    .messages { padding: 16px; gap: 16px; }
+    .msg-bubble { padding: 10px 14px; font-size: 13px; max-width: 90%; }
+    .chat-input-area { padding: 12px 16px; }
+    /* FAB adjustments */
+    #live-voice-fab { bottom: 80px !important; right: 20px !important; padding: 10px 16px !important; font-size: 12px !important; }
+    #live-voice-fab span:first-child { font-size: 16px !important; }
+    /* Table responsiveness */
+    .table { display: block; overflow-x: auto; white-space: nowrap; }
+  }
 
   /* ── AUTH PAGES ─────────────────────────────────────────────────────────── */
   .auth-page { height: 100vh; display: flex; align-items: center; justify-content: center; background: radial-gradient(ellipse at 20% 50%, rgba(245,166,35,0.06) 0%, var(--ink) 60%); padding: 24px; }
@@ -633,10 +663,7 @@ const ACTIVITY = [
 ];
 
 const QUIZZES = [
-  { id: 1, title: "Calculus: Derivatives & Integrals", subject: "Mathematics", questions: 10, time: "15 min", difficulty: "Medium", color: "#F5A623", bg: "rgba(245,166,35,0.1)", emoji: "∫" },
-  { id: 2, title: "Quantum Mechanics Fundamentals", subject: "Physics", questions: 8, time: "12 min", difficulty: "Hard", color: "#4ECDC4", bg: "rgba(78,205,196,0.1)", emoji: "⚛" },
-  { id: 3, title: "Organic Chemistry Reactions", subject: "Chemistry", questions: 12, time: "20 min", difficulty: "Hard", color: "#9B8FFF", bg: "rgba(155,143,255,0.1)", emoji: "🧪" },
-  { id: 4, title: "Cell Biology & Genetics", subject: "Biology", questions: 10, time: "15 min", difficulty: "Easy", color: "#52D78A", bg: "rgba(82,215,138,0.1)", emoji: "🔬" },
+  // Will be populated from API
 ];
 
 const QUIZ_QUESTIONS = [
@@ -1114,6 +1141,8 @@ const ChatPage = () => {
 
 // ─── QUIZ PAGE ────────────────────────────────────────────────────────────────
 const QuizPage = () => {
+  const [quizzes, setQuizzes] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [selectedQuiz, setSelectedQuiz] = useState(null);
   const [started, setStarted] = useState(false);
   const [qIndex, setQIndex] = useState(0);
@@ -1121,23 +1150,117 @@ const QuizPage = () => {
   const [revealed, setRevealed] = useState(false);
   const [answers, setAnswers] = useState([]);
   const [done, setDone] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    fetchQuizzes();
+  }, []);
+
+  const fetchQuizzes = async () => {
+    try {
+      const data = await apiFetch('/quizzes/');
+      // Transform API data to match UI format
+      const transformed = data.items.map(q => ({
+        id: q.id,
+        title: q.title,
+        subject: q.subject?.name || 'General',
+        questions: q.question_count,
+        time: `${Math.floor(q.time_limit_seconds / 60)} min`,
+        difficulty: q.difficulty,
+        emoji: getSubjectEmoji(q.subject?.name),
+        bg: getSubjectBg(q.subject?.name),
+        color: getSubjectColor(q.subject?.name),
+        description: q.description,
+      }));
+      setQuizzes(transformed);
+    } catch (error) {
+      console.error('Failed to fetch quizzes:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getSubjectEmoji = (subject) => {
+    const emojis = { Mathematics: '∫', Physics: '⚛', Chemistry: '🧪', Biology: '🔬' };
+    return emojis[subject] || '📚';
+  };
+
+  const getSubjectBg = (subject) => {
+    const bgs = {
+      Mathematics: 'rgba(245,166,35,0.1)',
+      Physics: 'rgba(78,205,196,0.1)',
+      Chemistry: 'rgba(155,143,255,0.1)',
+      Biology: 'rgba(82,215,138,0.1)'
+    };
+    return bgs[subject] || 'rgba(155,143,255,0.1)';
+  };
+
+  const getSubjectColor = (subject) => {
+    const colors = { Mathematics: '#F5A623', Physics: '#4ECDC4', Chemistry: '#9B8FFF', Biology: '#52D78A' };
+    return colors[subject] || '#9B8FFF';
+  };
 
   const reset = () => { setStarted(false); setQIndex(0); setSelected(null); setRevealed(false); setAnswers([]); setDone(false); };
-  const startQuiz = (q) => { setSelectedQuiz(q); reset(); setStarted(true); };
+  const startQuiz = async (q) => {
+    setSelectedQuiz(q);
+    reset();
+    setStarted(true);
+    // Fetch full quiz data with questions
+    try {
+      const quizData = await apiFetch(`/quizzes/${q.id}`);
+      setSelectedQuiz({ ...q, questions: quizData.questions });
+    } catch (error) {
+      console.error('Failed to fetch quiz questions:', error);
+    }
+  };
 
   const handleSelect = (i) => { if (revealed) return; setSelected(i); };
   const handleCheck = () => {
     if (selected === null) return;
     setRevealed(true);
-    setAnswers(prev => [...prev, selected === QUIZ_QUESTIONS[qIndex].answer]);
+    setAnswers(prev => [...prev, selected === selectedQuiz.questions[qIndex].correct_idx]);
   };
+
   const handleNext = () => {
-    if (qIndex === QUIZ_QUESTIONS.length - 1) { setDone(true); return; }
+    if (qIndex === selectedQuiz.questions.length - 1) { setDone(true); return; }
     setQIndex(i => i + 1); setSelected(null); setRevealed(false);
   };
 
+  const submitQuiz = async () => {
+    setSubmitting(true);
+    try {
+      const answersObj = {};
+      selectedQuiz.questions.forEach((q, i) => {
+        answersObj[q.id] = answers[i] !== undefined ? answers[i] : null;
+      });
+
+      const result = await apiFetch(`/quizzes/${selectedQuiz.id}/attempt`, {
+        method: 'POST',
+        body: JSON.stringify({ answers: answersObj })
+      });
+
+      // Update done state with results
+      setDone({ ...result, answers });
+    } catch (error) {
+      console.error('Failed to submit quiz:', error);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const correctCount = answers.filter(Boolean).length;
-  const pct = Math.round((correctCount / QUIZ_QUESTIONS.length) * 100);
+  const pct = selectedQuiz?.questions ? Math.round((correctCount / selectedQuiz.questions.length) * 100) : 0;
+
+  if (loading) {
+    return (
+      <div className="page-enter">
+        <div className="loading-state">
+          <div className="loading-spinner"></div>
+          <div>Loading quizzes...</div>
+        </div>
+      </div>
+    );
+  }
 
   if (!started) {
     return (
@@ -1147,7 +1270,31 @@ const QuizPage = () => {
             <div className="section-title">Quiz Engine</div>
             <div style={{ fontSize: 13, color: "var(--text-3)", marginTop: 2 }}>Adaptive quizzes powered by spaced repetition</div>
           </div>
-          <button className="btn btn-primary"><Icon n="plus" s={15} /> Create Quiz</button>
+          <div style={{ display: "flex", gap: 12 }}>
+            <button className="btn btn-secondary" onClick={() => fetchQuizzes()}>
+              <Icon n="refresh" s={15} /> Refresh
+            </button>
+            <button className="btn btn-primary" onClick={async () => {
+              try {
+                const result = await apiFetch('/quiz-engine/adaptive');
+                const transformed = {
+                  id: result.id,
+                  title: result.title,
+                  subject: result.subject?.name || 'Adaptive',
+                  difficulty: result.difficulty,
+                  emoji: '🎯',
+                  bg: 'rgba(245,166,35,0.1)',
+                  color: '#F5A623',
+                  questions: result.questions,
+                };
+                startQuiz(transformed);
+              } catch (error) {
+                console.error('Failed to get adaptive quiz:', error);
+              }
+            }}>
+              <Icon n="target" s={15} /> Adaptive Quiz
+            </button>
+          </div>
         </div>
         <div className="quiz-layout">
           <div className="quiz-list-panel">
@@ -1158,14 +1305,14 @@ const QuizPage = () => {
                 ))}
               </div>
             </div>
-            {QUIZZES.map(q => (
+            {quizzes.map(q => (
               <div key={q.id} className={`quiz-card ${selectedQuiz?.id === q.id ? "active" : ""}`} onClick={() => setSelectedQuiz(q)}>
                 <div className="quiz-card-top">
                   <div style={{ width: 40, height: 40, background: q.bg, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flex: "0 0 auto" }}>{q.emoji}</div>
                   <div style={{ flex: 1 }}>
                     <span className="quiz-tag" style={{ background: q.bg, color: q.color }}>{q.subject}</span>
                   </div>
-                  <span className="quiz-tag" style={{ background: q.difficulty === "Hard" ? "rgba(255,107,107,0.1)" : q.difficulty === "Medium" ? "rgba(245,166,35,0.1)" : "rgba(82,215,138,0.1)", color: q.difficulty === "Hard" ? "var(--rose)" : q.difficulty === "Medium" ? "var(--amber)" : "var(--green)" }}>{q.difficulty}</span>
+                  <span className="quiz-tag" style={{ background: q.difficulty === "hard" ? "rgba(255,107,107,0.1)" : q.difficulty === "medium" ? "rgba(245,166,35,0.1)" : "rgba(82,215,138,0.1)", color: q.difficulty === "hard" ? "var(--rose)" : q.difficulty === "medium" ? "var(--amber)" : "var(--green)" }}>{q.difficulty}</span>
                 </div>
                 <div className="quiz-card-title">{q.title}</div>
                 <div className="quiz-meta">
@@ -1183,7 +1330,7 @@ const QuizPage = () => {
                   <div style={{ width: 80, height: 80, background: selectedQuiz.bg, borderRadius: 20, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 40 }}>{selectedQuiz.emoji}</div>
                   <div>
                     <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 24, color: "var(--text)", marginBottom: 8 }}>{selectedQuiz.title}</div>
-                    <div style={{ fontSize: 14, color: "var(--text-3)", lineHeight: 1.7, maxWidth: 440 }}>Test your knowledge with {selectedQuiz.questions} carefully crafted questions. Track your progress and review detailed explanations for each answer.</div>
+                    <div style={{ fontSize: 14, color: "var(--text-3)", lineHeight: 1.7, maxWidth: 440 }}>{selectedQuiz.description || `Test your knowledge with ${selectedQuiz.questions} carefully crafted questions. Track your progress and review detailed explanations for each answer.`}</div>
                   </div>
                   <div style={{ display: "flex", gap: 24 }}>
                     {[["📝", `${selectedQuiz.questions} Questions`], ["⏱", selectedQuiz.time], ["📊", selectedQuiz.difficulty]].map(([e, l]) => (
@@ -1203,7 +1350,7 @@ const QuizPage = () => {
                 <div className="empty-state">
                   <div className="empty-icon">📋</div>
                   <div className="empty-text">Select a quiz to begin</div>
-                  <div className="empty-sub">Choose from {QUIZZES.length} available quizzes</div>
+                  <div className="empty-sub">Choose from {quizzes.length} available quizzes</div>
                 </div>
               </div>
             )}
@@ -1223,16 +1370,29 @@ const QuizPage = () => {
             <div className="result-score">{pct}%</div>
             <div className="result-label">{grade}</div>
             <div className="result-grid">
-              {[["Correct", `${correctCount}/${QUIZ_QUESTIONS.length}`], ["Time", "4:32"], ["XP Earned", `+${pct * 2}`]].map(([l, v]) => (
+              {done.attempt ? [
+                ["Correct", `${done.correct_count}/${done.total_questions}`],
+                ["Time", done.attempt.time_taken_seconds ? `${Math.floor(done.attempt.time_taken_seconds / 60)}:${(done.attempt.time_taken_seconds % 60).toString().padStart(2, '0')}` : "N/A"],
+                ["XP Earned", `+${done.attempt.xp_earned}`]
+              ].map(([l, v]) => (
                 <div key={l} className="result-stat">
                   <div className="result-stat-val">{v}</div>
                   <div className="result-stat-lbl">{l}</div>
                 </div>
-              ))}
+              )) : (
+                [["Correct", `${correctCount}/${selectedQuiz.questions.length}`], ["Time", "N/A"], ["XP Earned", "N/A"]].map(([l, v]) => (
+                  <div key={l} className="result-stat">
+                    <div className="result-stat-val">{v}</div>
+                    <div className="result-stat-lbl">{l}</div>
+                  </div>
+                ))
+              )}
             </div>
             <div style={{ display: "flex", gap: 12 }}>
               <button className="btn btn-secondary" onClick={reset}>Review Answers</button>
-              <button className="btn btn-primary" onClick={() => { reset(); setSelectedQuiz(null); }}>Back to Quizzes <Icon n="arrow_right" s={15} /></button>
+              <button className="btn btn-primary" onClick={() => { reset(); setSelectedQuiz(null); }}>
+                Back to Quizzes <Icon n="arrow_right" s={15} />
+              </button>
             </div>
           </div>
         </div>
@@ -1240,35 +1400,68 @@ const QuizPage = () => {
     );
   }
 
-  const q = QUIZ_QUESTIONS[qIndex];
+  if (!selectedQuiz.questions || selectedQuiz.questions.length === 0) {
+    return (
+      <div className="page-enter">
+        <div className="loading-state">
+          <div className="loading-spinner"></div>
+          <div>Loading quiz questions...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (qIndex < 0 || qIndex >= selectedQuiz.questions.length) {
+    return (
+      <div className="page-enter">
+        <div style={{ textAlign: "center", padding: 40 }}>
+          <div style={{ fontSize: 18, color: "var(--rose)" }}>Error: Invalid question index</div>
+        </div>
+      </div>
+    );
+  }
+
+  const q = selectedQuiz.questions[qIndex];
+  
+  if (!q || !q.text || !q.options || q.correct_idx === undefined) {
+    return (
+      <div className="page-enter">
+        <div style={{ textAlign: "center", padding: 40 }}>
+          <div style={{ fontSize: 18, color: "var(--rose)" }}>Error: Question data is incomplete</div>
+          <button className="btn btn-primary" onClick={reset} style={{ marginTop: 20 }}>Exit Quiz</button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="page-enter">
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
         <button className="btn btn-ghost" onClick={reset}><Icon n="arrow_left" s={15} /> Exit Quiz</button>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--text-3)" }}>
-          {qIndex + 1} / {QUIZ_QUESTIONS.length}
+          {qIndex + 1} / {selectedQuiz.questions.length}
         </span>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--amber)", background: "var(--amber-soft)", padding: "4px 12px", borderRadius: 20 }}>⏱ 4:32</span>
       </div>
 
       <div style={{ maxWidth: 680, margin: "0 auto" }}>
         <div className="q-progress-bar">
-          <div className="q-progress-fill" style={{ width: `${((qIndex + (revealed ? 1 : 0)) / QUIZ_QUESTIONS.length) * 100}%` }} />
+          <div className="q-progress-fill" style={{ width: `${((qIndex + (revealed ? 1 : 0)) / selectedQuiz.questions.length) * 100}%` }} />
         </div>
 
         <div className="question-panel">
-          <div className="q-number">QUESTION {qIndex + 1} OF {QUIZ_QUESTIONS.length}</div>
-          <div className="q-text">{q.q}</div>
+          <div className="q-number">QUESTION {qIndex + 1} OF {selectedQuiz.questions.length}</div>
+          <div className="q-text">{q.text}</div>
           <div className="q-options">
             {q.options.map((opt, i) => {
               let cls = "";
-              if (revealed) { if (i === q.answer) cls = "correct"; else if (i === selected) cls = "wrong"; }
+              if (revealed) { if (i === q.correct_idx) cls = "correct"; else if (i === selected) cls = "wrong"; }
               else if (i === selected) cls = "selected";
               return (
                 <div key={i} className={`q-option ${cls}`} onClick={() => handleSelect(i)}>
                   <div className="q-option-letter">{String.fromCharCode(65 + i)}</div>
                   {opt}
-                  {revealed && i === q.answer && <span style={{ marginLeft: "auto" }}>✓</span>}
+                  {revealed && i === q.correct_idx && <span style={{ marginLeft: "auto" }}>✓</span>}
                 </div>
               );
             })}
@@ -1281,9 +1474,13 @@ const QuizPage = () => {
               <button className="btn btn-primary" style={{ marginLeft: "auto" }} disabled={selected === null} onClick={handleCheck}>
                 Check Answer
               </button>
+            ) : qIndex === selectedQuiz.questions.length - 1 ? (
+              <button className="btn btn-primary" style={{ marginLeft: "auto" }} disabled={submitting} onClick={submitQuiz}>
+                {submitting ? "Submitting..." : "Submit Quiz"} <Icon n="send" s={15} />
+              </button>
             ) : (
               <button className="btn btn-primary" style={{ marginLeft: "auto" }} onClick={handleNext}>
-                {qIndex === QUIZ_QUESTIONS.length - 1 ? "See Results" : "Next Question"} <Icon n="arrow_right" s={15} />
+                Next Question <Icon n="arrow_right" s={15} />
               </button>
             )}
           </div>
@@ -1679,7 +1876,7 @@ function AppShell() {
 
   const pageMap = {
     dashboard: { title: 'Dashboard', sub: `Welcome back, ${user?.display_name?.split(' ')[0] || 'there'} 👋`, component: <DashboardPage /> },
-    chat: { title: 'AI Tutor', sub: 'Real-time learning assistant', component: <ChatPage /> },
+    chat: { title: 'AI Tutor', sub: 'Real-time learning assistant with RAG', component: <AiTutorPage /> },
     quiz: { title: 'Quiz Engine', sub: 'Test your knowledge', component: <QuizPage /> },
     users: { title: 'Users', sub: 'Manage learners', component: <UsersPage /> },
     settings: { title: 'Settings', sub: 'Manage your profile & account', component: <SettingsPage /> },

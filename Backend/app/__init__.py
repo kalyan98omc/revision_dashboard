@@ -27,6 +27,10 @@ def create_app(config=None) -> Flask:
     cfg = config or get_config()
     app.config.from_object(cfg)
 
+    # Disable strict slashes globally — prevents 308 redirect on trailing slashes
+    # which breaks CORS preflight requests.
+    app.url_map.strict_slashes = False
+
     # ── Ensure upload directory exists ────────────────────────────────────────
     os.makedirs(app.config.get("UPLOAD_FOLDER", "./uploads"), exist_ok=True)
 
@@ -71,7 +75,7 @@ def _init_extensions(app: Flask) -> None:
 
     cors.init_app(
         app,
-        resources={r"/api/*": {"origins": app.config["CORS_ORIGINS"]}},
+        resources={r"/api/.*": {"origins": app.config["CORS_ORIGINS"]}},
         supports_credentials=True,
     )
 
@@ -90,13 +94,14 @@ def _init_extensions(app: Flask) -> None:
 
 def _register_blueprints(app: Flask) -> None:
     from app.controllers.controllers import (
-        auth_bp, user_bp, quiz_bp, chat_bp, subject_bp, health_bp,
+        auth_bp, user_bp, quiz_bp, quiz_engine_bp, chat_bp, subject_bp, health_bp,
     )
     from app.controllers.admin_controller import admin_bp
     from app.controllers.revision_controller import revision_bp
+    from app.controllers.document_controller import documents_bp
 
-    for blueprint in (auth_bp, user_bp, quiz_bp, chat_bp, subject_bp,
-                      health_bp, admin_bp, revision_bp):
+    for blueprint in (auth_bp, user_bp, quiz_bp, quiz_engine_bp, chat_bp, subject_bp,
+                      health_bp, admin_bp, revision_bp, documents_bp):
         app.register_blueprint(blueprint)
 
 

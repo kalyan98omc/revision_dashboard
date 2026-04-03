@@ -86,6 +86,7 @@ class QuizAttemptSchema(Schema):
 
 class ChatMessageSchema(Schema):
     message = fields.Str(required=True, validate=validate.Length(min=1, max=4000))
+    custom_system_prompt = fields.Str(allow_none=True)
     class Meta:
         unknown = EXCLUDE
 
@@ -352,6 +353,116 @@ def my_attempts():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  QUIZ ENGINE BLUEPRINT
+# ─────────────────────────────────────────────────────────────────────────────
+
+quiz_engine_bp = Blueprint("quiz_engine", __name__, url_prefix="/api/v1/quiz-engine")
+
+
+@quiz_engine_bp.get("/templates")
+@jwt_required()
+def list_templates():
+    subject_id = request.args.get("subject_id")
+    try:
+        from app.services.quiz_engine import QuizEngineService
+        templates = QuizEngineService.list_templates(subject_id=subject_id)
+        return jsonify({"items": templates}), 200
+    except Exception as e:
+        return _handle_service_error(e)
+
+
+@quiz_engine_bp.post("/templates")
+@jwt_required()
+@roles_required(UserRole.ADMIN, UserRole.TEACHER)
+@require_json
+def create_template():
+    try:
+        data = CreateQuizTemplateSchema().load(request.get_json())
+    except ValidationError as e:
+        return jsonify({"error": "Validation failed", "details": e.messages}), 422
+
+    try:
+        from app.services.quiz_engine import QuizEngineService
+        template = QuizEngineService.create_template(
+            created_by=get_jwt_identity(),
+            **data
+        )
+        return jsonify(template), 201
+    except Exception as e:
+        return _handle_service_error(e)
+
+
+@quiz_engine_bp.post("/generate")
+@jwt_required()
+@require_json
+def generate_quiz():
+    try:
+        data = GenerateQuizSchema().load(request.get_json())
+    except ValidationError as e:
+        return jsonify({"error": "Validation failed", "details": e.messages}), 422
+
+    try:
+        from app.services.quiz_engine import QuizEngineService
+        result = QuizEngineService.generate_quiz(
+            template_id=data["template_id"],
+            user_id=get_jwt_identity(),
+            custom_query=data.get("custom_query"),
+        )
+        return jsonify(result), 201
+    except Exception as e:
+        return _handle_service_error(e)
+
+
+@quiz_engine_bp.get("/adaptive")
+@jwt_required()
+def get_adaptive_quiz():
+    subject_id = request.args.get("subject_id")
+    try:
+        from app.services.quiz_engine import QuizEngineService
+        quiz = QuizEngineService.get_adaptive_quiz(
+            user_id=get_jwt_identity(),
+            subject_id=subject_id,
+        )
+        return jsonify(quiz), 200
+    except Exception as e:
+        return _handle_service_error(e)
+
+
+@quiz_engine_bp.get("/me/generations")
+@jwt_required()
+def my_generations():
+    try:
+        from app.repositories.repositories import QuizGenerationRepository
+        generations = QuizGenerationRepository.get_user_generations(get_jwt_identity())
+        return jsonify({"items": [g.to_dict() for g in generations]}), 200
+    except Exception as e:
+        return _handle_service_error(e)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  VALIDATION SCHEMAS (continued)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class CreateQuizTemplateSchema(Schema):
+    name = fields.Str(required=True, validate=validate.Length(min=1, max=200))
+    description = fields.Str(allow_none=True)
+    subject_id = fields.Str(allow_none=True)
+    topic_id = fields.Str(allow_none=True)
+    difficulty = fields.Str(validate=validate.OneOf(["easy", "medium", "hard"]), load_default="medium")
+    question_count = fields.Int(validate=validate.Range(min=5, max=50), load_default=10)
+    time_limit_minutes = fields.Int(validate=validate.Range(min=5, max=120), load_default=15)
+    prompt_template = fields.Str(allow_none=True)
+    class Meta:
+        unknown = EXCLUDE
+
+class GenerateQuizSchema(Schema):
+    template_id = fields.Str(required=True)
+    custom_query = fields.Str(allow_none=True)
+    class Meta:
+        unknown = EXCLUDE
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  CHAT BLUEPRINT (REST endpoints for history / session management)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -419,6 +530,7 @@ def stream_chat(session_id: str):
                 session_id=session_id,
                 user_id=user_id,
                 user_message=data["message"],
+                custom_system_prompt=data.get("custom_system_prompt"),
             ):
                 # SSE format
                 yield f"data: {chunk}\n\n"
@@ -432,6 +544,48 @@ def stream_chat(session_id: str):
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",  # Disable nginx buffering
+        },
+    )
+
+
+@chat_bp.post("/sessions/<session_id>/message")
+@jwt_required()
+@limiter.limit("30 per minute")
+@require_json
+def send_message(session_id: str):
+    """
+    Alias for stream_chat endpoint.
+    Accepts POST with {"message": "user message"}
+    Returns streaming response with text/event-stream or plain text.
+    """
+    try:
+        data = ChatMessageSchema().load(request.get_json())
+    except ValidationError as e:
+        return jsonify({"error": "Validation failed", "details": e.messages}), 422
+
+    user_id = get_jwt_identity()
+
+    def generate():
+        try:
+            for chunk in ChatService.stream_response(
+                session_id=session_id,
+                user_id=user_id,
+                user_message=data["message"],
+                custom_system_prompt=data.get("custom_system_prompt"),
+            ):
+                yield chunk
+
+        except Exception as e:
+            log.error("stream_error", exc=str(e), session_id=session_id)
+            yield f"[ERROR] {str(e)}"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/plain; charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Transfer-Encoding": "chunked",
         },
     )
 
@@ -465,6 +619,82 @@ def transcribe_audio(session_id: str):
         return _handle_service_error(e)
 
 
+@chat_bp.post("/realtime/token")
+@jwt_required()
+@limiter.limit("10 per minute")
+def create_realtime_token():
+    """
+    Create an ephemeral OpenAI Realtime API session token.
+    The frontend uses this short-lived key to connect directly to OpenAI's
+    WebSocket endpoint without exposing the main API key in the browser.
+    """
+    from flask import current_app
+    import requests as _requests
+
+    api_key = current_app.config.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return jsonify({"error": "OpenAI API key not configured"}), 503
+
+    subject_id = (request.get_json(silent=True) or {}).get("subject_id")
+
+    # Build a tutor-focused system prompt
+    subject_context = ""
+    if subject_id:
+        try:
+            from app.models.models import Subject
+            subj = db.session.get(Subject, subject_id)
+            if subj:
+                subject_context = f" You are currently helping with {subj.name}."
+        except Exception:
+            pass
+
+    system_prompt = (
+        "You are an expert NEET-PG medical AI tutor having a live voice conversation with a student."
+        + subject_context
+        + " Speak in a clear, friendly, encouraging tone. Keep answers concise and well-structured."
+        " Ask the student to repeat if audio is unclear. Use simple language for complex medical concepts."
+    )
+
+    try:
+        resp = _requests.post(
+            "https://api.openai.com/v1/realtime/sessions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "gpt-4o-realtime-preview-2024-12-17",
+                "modalities": ["audio", "text"],
+                "instructions": system_prompt,
+                "voice": "alloy",
+                "input_audio_format": "pcm16",
+                "output_audio_format": "pcm16",
+                "turn_detection": {
+                    "type": "server_vad",
+                    "threshold": 0.5,
+                    "prefix_padding_ms": 300,
+                    "silence_duration_ms": 800,
+                },
+            },
+            timeout=10,
+        )
+        if not resp.ok:
+            log.error("realtime.token_error", status=resp.status_code, body=resp.text)
+            return jsonify({"error": f"OpenAI error: {resp.text}"}), resp.status_code
+
+        data = resp.json()
+        # Return only the ephemeral key and model info — never expose the main key
+        return jsonify({
+            "client_secret": data.get("client_secret"),
+            "session_id": data.get("id"),
+            "model": data.get("model"),
+        }), 200
+
+    except Exception as e:
+        log.error("realtime.token_exception", error=str(e))
+        return jsonify({"error": str(e)}), 500
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  SUBJECT BLUEPRINT
 # ─────────────────────────────────────────────────────────────────────────────
@@ -472,7 +702,8 @@ def transcribe_audio(session_id: str):
 subject_bp = Blueprint("subjects", __name__, url_prefix="/api/v1/subjects")
 
 
-@subject_bp.get("/")
+@subject_bp.get("", strict_slashes=False)
+@subject_bp.get("/", strict_slashes=False)
 @jwt_required()
 def list_subjects():
     subjects = SubjectService.get_all()

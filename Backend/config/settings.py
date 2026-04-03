@@ -59,7 +59,7 @@ class BaseConfig:
 
     # ── Rate Limiting ─────────────────────────────────────────────────────────
     RATELIMIT_STORAGE_URI: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    RATELIMIT_DEFAULT: str = os.getenv("RATE_LIMIT_DEFAULT", "200 per day;50 per hour")
+    RATELIMIT_DEFAULT: str = os.getenv("RATE_LIMIT_DEFAULT", "5000 per day;5000 per hour")
     RATELIMIT_STRATEGY = "fixed-window"
     RATELIMIT_HEADERS_ENABLED = True
 

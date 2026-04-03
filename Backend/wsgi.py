@@ -6,8 +6,10 @@ Run with:  gunicorn "wsgi:application" --worker-class eventlet -w 4 -b 0.0.0.0:5
 Dev:       python wsgi.py
 """
 
-import eventlet
-eventlet.monkey_patch()   # Must be first — patches stdlib for async I/O
+import sys
+if "celery" not in sys.argv[0]:
+    import eventlet
+    eventlet.monkey_patch()   # Must be first — patches stdlib for async I/O
 
 from celery import Celery as _Celery
 from app import create_app

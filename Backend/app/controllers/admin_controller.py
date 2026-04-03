@@ -119,6 +119,45 @@ def delete_document(doc_id: str):
         return _handle_error(e)
 
 
+@admin_bp.route("/documents/<doc_id>/retry", methods=["POST"])
+@jwt_required()
+def retry_document(doc_id: str):
+    """Retry uploading a failed/stuck document to OpenAI vector store."""
+    try:
+        _require_admin()
+        result = AdminService.retry_document(doc_id)
+        return jsonify({
+            "message": "Document upload retried",
+            "document": result
+        }), 200
+    except Exception as e:
+        return _handle_error(e)
+
+
+@admin_bp.route("/documents/<doc_id>/status", methods=["GET"])
+@jwt_required()
+def check_document_status(doc_id: str):
+    """Check detailed status of a document in OpenAI vector store."""
+    try:
+        _require_admin()
+        status = AdminService.check_document_status(doc_id)
+        return jsonify(status), 200
+    except Exception as e:
+        return _handle_error(e)
+
+
+@admin_bp.route("/vector-store/verify", methods=["GET"])
+@jwt_required()
+def verify_vector_store():
+    """Verify connection to OpenAI vector store and get status."""
+    try:
+        _require_admin()
+        status = AdminService.verify_vector_store_connection()
+        return jsonify(status), 200 if status.get("connected") else 503
+    except Exception as e:
+        return _handle_error(e)
+
+
 # ─── Subject & Topic Endpoints ───────────────────────────────────────────────
 
 @admin_bp.route("/subjects", methods=["GET"])

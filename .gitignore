@@ -1,0 +1,17 @@
+# Environment variables
+.env
+Backend/.env
+Frontend/.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# macOS
+.DS_Store

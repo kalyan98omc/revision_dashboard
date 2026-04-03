@@ -63,6 +63,7 @@ services:
       redis:
         condition: service_healthy
     volumes:
+      - .:/app
       - ./uploads:/app/uploads
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
@@ -82,6 +83,8 @@ services:
       DATABASE_URL: postgresql://apexlearn:password@postgres:5432/apexlearn_dev
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/2
+    volumes:
+      - .:/app
     depends_on:
       - api
       - redis
@@ -90,7 +93,7 @@ services:
   celery_beat:
     build: .
     restart: unless-stopped
-    command: celery -A wsgi.celery beat --loglevel=info --scheduler celery.beat:PersistentScheduler
+    command: celery -A wsgi.celery beat --loglevel=info --scheduler celery.beat:PersistentScheduler --schedule /tmp/celerybeat-schedule
     env_file: .env
     environment:
       FLASK_APP: app:create_app

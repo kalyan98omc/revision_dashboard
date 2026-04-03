@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const SUBJECTS = [
@@ -227,7 +227,8 @@ const StatusPill = ({ status }) => {
         indexed: { bg: "var(--color-background-success)", color: "var(--color-text-success)", label: "INDEXED" },
         processing: { bg: "var(--color-background-warning)", color: "var(--color-text-warning)", label: "PROCESSING" },
         error: { bg: "var(--color-background-danger)", color: "var(--color-text-danger)", label: "ERROR" },
-    }[status] || { bg: "var(--color-background-secondary)", color: "var(--color-text-secondary)", label: status };
+        failed: { bg: "var(--color-background-danger)", color: "var(--color-text-danger)", label: "FAILED" },
+    }[status] || { bg: "var(--color-background-secondary)", color: "var(--color-text-secondary)", label: status?.toUpperCase() || "UNKNOWN" };
     return (
         <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, letterSpacing: "0.05em", background: cfg.bg, color: cfg.color }}>{cfg.label}</span>
     );
@@ -297,11 +298,12 @@ function ModelStudio({ models, setModels, customTags, showMsg }) {
     };
 
     const injectTagsIntoPrompt = () => {
+        const currentData = isCreating ? draft : models.find(m => m.id === selected);
         const allTags = [...PRESET_BEHAVIOR_TAGS, ...customTags];
-        const activeTags = allTags.filter(t => data.behavior_tags?.includes(t.id));
+        const activeTags = allTags.filter(t => currentData?.behavior_tags?.includes(t.id));
         if (!activeTags.length) return showMsg("No behavior tags selected to inject", true);
         const injected = activeTags.map(t => `[${t.label.toUpperCase()}]: ${t.prompt_snippet}`).join("\n\n");
-        const base = data.system_prompt ? data.system_prompt.trim() + "\n\n" : "";
+        const base = currentData?.system_prompt ? currentData.system_prompt.trim() + "\n\n" : "";
         updateField("system_prompt", base + "--- BEHAVIOR DIRECTIVES ---\n\n" + injected);
         showMsg(`Injected ${activeTags.length} behavior tag(s) into prompt`);
     };
@@ -317,7 +319,7 @@ function ModelStudio({ models, setModels, customTags, showMsg }) {
         setModels(ms => [m, ...ms]);
         setSelected(m.id);
         setIsCreating(false);
-        setDraft({ name: "", base_model: "gpt-4o", capabilities: [], target_levels: [], target_goals: [], subject_ids: [], system_prompt: "" });
+        setDraft({ name: "", base_model: "gpt-4o", capabilities: [], target_levels: [], target_goals: [], subject_ids: [], behavior_tags: [], system_prompt: "" });
         showMsg("Model variant created");
     };
 
@@ -549,29 +551,102 @@ function ModelStudio({ models, setModels, customTags, showMsg }) {
 }
 
 // ─── TAB: RAG PIPELINE ────────────────────────────────────────────────────────
-function RagPipeline({ docs, setDocs, showMsg }) {
+const API_BASE = "http://localhost:5000/api/v1";
+const getToken = () => localStorage.getItem("access_token");
+
+function RagPipeline({ showMsg }) {
+    const [docs, setDocs] = useState([]);
     const [activeSubject, setActiveSubject] = useState("all");
     const [dragOver, setDragOver] = useState(false);
+    const [loading, setLoading] = useState(true);
+    const [uploading, setUploading] = useState(false);
+
+    // ── Fetch existing documents from backend ──────────────────────────────
+    const fetchDocs = async () => {
+        try {
+            const token = getToken();
+            const url = activeSubject === "all"
+                ? `${API_BASE}/admin/documents`
+                : `${API_BASE}/admin/documents?subject_id=${activeSubject}`;
+            const res = await fetch(url, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            setDocs(data.documents || []);
+        } catch (err) {
+            showMsg(`Failed to load documents: ${err.message}`, true);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => { fetchDocs(); }, [activeSubject]);
+
+    // ── Upload files to backend ────────────────────────────────────────────
+    const uploadFiles = async (files) => {
+        if (!files || files.length === 0) return;
+        setUploading(true);
+        const token = getToken();
+        let successCount = 0;
+
+        for (const file of Array.from(files)) {
+            const formData = new FormData();
+            formData.append("file", file);
+            if (activeSubject !== "all") formData.append("subject_id", activeSubject);
+
+            try {
+                const res = await fetch(`${API_BASE}/admin/documents/upload`, {
+                    method: "POST",
+                    headers: { Authorization: `Bearer ${token}` },
+                    body: formData,
+                });
+                if (!res.ok) {
+                    const err = await res.json();
+                    showMsg(`Upload failed for ${file.name}: ${err.error}`, true);
+                } else {
+                    successCount++;
+                }
+            } catch (err) {
+                showMsg(`Upload failed for ${file.name}: ${err.message}`, true);
+            }
+        }
+        setUploading(false);
+        if (successCount > 0) {
+            showMsg(`${successCount} file(s) uploaded and indexed to vector store`);
+            fetchDocs(); // refresh list
+        }
+    };
 
     const handleDrop = useCallback((e) => {
         e.preventDefault();
         setDragOver(false);
-        const files = Array.from(e.dataTransfer.files);
-        const newDocs = files.map(f => ({
-            id: "d" + Date.now() + Math.random(), filename: f.name,
-            subject_id: activeSubject === "all" ? "" : activeSubject,
-            status: "processing", pages: Math.floor(Math.random() * 200 + 10),
-            size: (f.size / 1048576).toFixed(1) + " MB", uploaded: new Date().toISOString().slice(0, 10),
-        }));
-        setDocs(d => [...newDocs, ...d]);
-        setTimeout(() => {
-            setDocs(d => d.map(doc => newDocs.find(n => n.id === doc.id) ? { ...doc, status: "indexed" } : doc));
-        }, 2500);
-        showMsg(`${files.length} file(s) queued for indexing`);
+        uploadFiles(e.dataTransfer?.files || e.target?.files);
     }, [activeSubject]);
 
+    // ── Delete document ────────────────────────────────────────────────────
+    const deleteDoc = async (docId) => {
+        if (!confirm("Delete this document from the vector store?")) return;
+        try {
+            const token = getToken();
+            const res = await fetch(`${API_BASE}/admin/documents/${docId}`, {
+                method: "DELETE",
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            showMsg("Document deleted");
+            setDocs(d => d.filter(doc => doc.id !== docId));
+        } catch (err) {
+            showMsg(`Delete failed: ${err.message}`, true);
+        }
+    };
+
     const filtered = activeSubject === "all" ? docs : docs.filter(d => d.subject_id === activeSubject);
-    const stats = { total: docs.length, indexed: docs.filter(d => d.status === "indexed").length, processing: docs.filter(d => d.status === "processing").length };
+    const stats = {
+        total: docs.length,
+        indexed: docs.filter(d => d.status === "indexed").length,
+        processing: docs.filter(d => d.status === "processing").length,
+    };
 
     return (
         <div>
@@ -596,64 +671,63 @@ function RagPipeline({ docs, setDocs, showMsg }) {
             </div>
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 24, padding: "8px", background: "var(--surface)", borderRadius: "20px", border: "1px solid var(--border)" }}>
-                <button onClick={() => setActiveSubject("all")} style={{
-                    padding: "8px 20px", borderRadius: "16px", fontSize: 13, fontWeight: 600, cursor: "pointer", transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)", border: "none",
-                    background: activeSubject === "all" ? "linear-gradient(135deg, var(--amber), #FF8A00)" : "transparent",
-                    color: activeSubject === "all" ? "var(--ink)" : "var(--text-3)",
-                    boxShadow: activeSubject === "all" ? "0 4px 12px var(--amber-glow)" : "none",
-                }} onMouseEnter={e => { if (activeSubject !== "all") { e.currentTarget.style.color = "var(--text)"; e.currentTarget.style.background = "var(--surface-2)"; } }} onMouseLeave={e => { if (activeSubject !== "all") { e.currentTarget.style.color = "var(--text-3)"; e.currentTarget.style.background = "transparent"; } }}>All</button>
+                <button onClick={() => setActiveSubject("all")} style={{ padding: "8px 20px", borderRadius: "16px", fontSize: 13, fontWeight: 600, cursor: "pointer", transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)", border: "none", background: activeSubject === "all" ? "linear-gradient(135deg, var(--amber), #FF8A00)" : "transparent", color: activeSubject === "all" ? "var(--ink)" : "var(--text-3)", boxShadow: activeSubject === "all" ? "0 4px 12px var(--amber-glow)" : "none" }}>All</button>
                 {SUBJECTS.map(s => (
-                    <button key={s.id} onClick={() => setActiveSubject(s.id)} style={{
-                        padding: "8px 20px", borderRadius: "16px", fontSize: 13, fontWeight: 600, cursor: "pointer", transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)", border: "none",
-                        background: activeSubject === s.id ? s.color : "transparent",
-                        color: activeSubject === s.id ? "#fff" : "var(--text-3)",
-                        boxShadow: activeSubject === s.id ? `0 4px 12px ${s.color}60` : "none",
-                    }} onMouseEnter={e => { if (activeSubject !== s.id) { e.currentTarget.style.color = "var(--text)"; e.currentTarget.style.background = "var(--surface-2)"; } }} onMouseLeave={e => { if (activeSubject !== s.id) { e.currentTarget.style.color = "var(--text-3)"; e.currentTarget.style.background = "transparent"; } }}>{s.abbr}</button>
+                    <button key={s.id} onClick={() => setActiveSubject(s.id)} style={{ padding: "8px 20px", borderRadius: "16px", fontSize: 13, fontWeight: 600, cursor: "pointer", transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)", border: "none", background: activeSubject === s.id ? s.color : "transparent", color: activeSubject === s.id ? "#fff" : "var(--text-3)", boxShadow: activeSubject === s.id ? `0 4px 12px ${s.color}60` : "none" }}>{s.abbr}</button>
                 ))}
             </div>
 
             <div onDrop={handleDrop} onDragOver={e => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)}
                 onClick={() => document.getElementById("rag-file-input").click()}
-                style={{
-                    border: `2px dashed ${dragOver ? "var(--color-border-info)" : "var(--color-border-tertiary)"}`,
-                    borderRadius: "var(--border-radius-lg)", padding: "32px 20px", textAlign: "center",
-                    cursor: "pointer", marginBottom: 16, transition: "all 0.15s",
-                    background: dragOver ? "var(--color-background-info)" : "transparent",
-                }}>
-                <div style={{ fontSize: 24, marginBottom: 8 }}>📄</div>
-                <div style={{ fontSize: 14, fontWeight: 500, color: "var(--color-text-primary)", marginBottom: 4 }}>Drop PDFs / text files here or click to upload</div>
-                <div style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Files are automatically chunked and vectorized via OpenAI File Search</div>
+                style={{ border: `2px dashed ${dragOver ? "var(--color-border-info)" : uploading ? "var(--color-border-warning)" : "var(--color-border-tertiary)"}`, borderRadius: "var(--border-radius-lg)", padding: "32px 20px", textAlign: "center", cursor: uploading ? "wait" : "pointer", marginBottom: 16, transition: "all 0.15s", background: dragOver ? "var(--color-background-info)" : uploading ? "var(--color-background-warning)" : "transparent" }}>
+                <div style={{ fontSize: 24, marginBottom: 8 }}>{uploading ? "⏳" : "📄"}</div>
+                <div style={{ fontSize: 14, fontWeight: 500, color: "var(--color-text-primary)", marginBottom: 4 }}>
+                    {uploading ? "Uploading to OpenAI Vector Store..." : "Drop PDFs / text files here or click to upload"}
+                </div>
+                <div style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
+                    {uploading ? "Please wait, this may take a moment" : "Files are automatically chunked and vectorized via OpenAI File Search"}
+                </div>
                 {activeSubject !== "all" && <div style={{ marginTop: 8, fontSize: 12, color: "var(--color-text-info)" }}>Will be tagged to: {SUBJECTS.find(s => s.id === activeSubject)?.name}</div>}
-                <input id="rag-file-input" type="file" multiple style={{ display: "none" }} onChange={e => handleDrop({ preventDefault: () => { }, dataTransfer: { files: e.target.files } })} />
+                <input id="rag-file-input" type="file" multiple accept=".pdf,.txt,.doc,.docx,.csv,.json" style={{ display: "none" }} onChange={e => uploadFiles(e.target.files)} />
             </div>
 
             <div style={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-lg)", overflow: "hidden" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
-                    <thead>
-                        <tr style={{ borderBottom: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-secondary)" }}>
-                            {[["Filename", "40%"], ["Subject", "15%"], ["Pages", "10%"], ["Size", "10%"], ["Uploaded", "12%"], ["Status", "13%"]].map(([h, w]) => (
-                                <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "var(--color-text-secondary)", letterSpacing: "0.05em", textTransform: "uppercase", width: w }}>{h}</th>
-                            ))}
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {filtered.map(doc => {
-                            const subj = SUBJECTS.find(s => s.id === doc.subject_id);
-                            return (
-                                <tr key={doc.id} style={{ borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
-                                    <td style={{ padding: "11px 14px", fontSize: 13, color: "var(--color-text-primary)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{doc.filename}</td>
-                                    <td style={{ padding: "11px 14px" }}>
-                                        {subj ? <span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 4, background: subj.color + "20", color: subj.color, fontWeight: 600 }}>{subj.abbr}</span> : <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Global</span>}
-                                    </td>
-                                    <td style={{ padding: "11px 14px", fontSize: 13, color: "var(--color-text-secondary)", fontFamily: "var(--font-mono)" }}>{doc.pages}</td>
-                                    <td style={{ padding: "11px 14px", fontSize: 13, color: "var(--color-text-secondary)" }}>{doc.size}</td>
-                                    <td style={{ padding: "11px 14px", fontSize: 12, color: "var(--color-text-secondary)" }}>{doc.uploaded}</td>
-                                    <td style={{ padding: "11px 14px" }}><StatusPill status={doc.status} /></td>
-                                </tr>
-                            );
-                        })}
-                    </tbody>
-                </table>
+                {loading ? (
+                    <div style={{ padding: 40, textAlign: "center", color: "var(--color-text-secondary)", fontSize: 13 }}>Loading documents from backend...</div>
+                ) : filtered.length === 0 ? (
+                    <div style={{ padding: 40, textAlign: "center", color: "var(--color-text-secondary)", fontSize: 13 }}>No documents uploaded yet. Drop a PDF above to get started.</div>
+                ) : (
+                    <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+                        <thead>
+                            <tr style={{ borderBottom: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-secondary)" }}>
+                                {[["Filename", "35%"], ["Subject", "12%"], ["Size", "10%"], ["Uploaded", "12%"], ["Status", "13%"], ["", "8%"]].map(([h, w]) => (
+                                    <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "var(--color-text-secondary)", letterSpacing: "0.05em", textTransform: "uppercase", width: w }}>{h}</th>
+                                ))}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {filtered.map(doc => {
+                                const subj = SUBJECTS.find(s => s.id === doc.subject_id);
+                                const sizeMB = doc.file_size_bytes ? (doc.file_size_bytes / 1048576).toFixed(1) + " MB" : doc.size || "—";
+                                const uploaded = doc.created_at ? doc.created_at.slice(0, 10) : doc.uploaded || "—";
+                                return (
+                                    <tr key={doc.id} style={{ borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+                                        <td style={{ padding: "11px 14px", fontSize: 13, color: "var(--color-text-primary)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={doc.original_name || doc.filename}>{doc.original_name || doc.filename}</td>
+                                        <td style={{ padding: "11px 14px" }}>
+                                            {subj ? <span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 4, background: subj.color + "20", color: subj.color, fontWeight: 600 }}>{subj.abbr}</span> : <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Global</span>}
+                                        </td>
+                                        <td style={{ padding: "11px 14px", fontSize: 13, color: "var(--color-text-secondary)" }}>{sizeMB}</td>
+                                        <td style={{ padding: "11px 14px", fontSize: 12, color: "var(--color-text-secondary)" }}>{uploaded}</td>
+                                        <td style={{ padding: "11px 14px" }}><StatusPill status={doc.status} /></td>
+                                        <td style={{ padding: "11px 14px" }}>
+                                            <button onClick={() => deleteDoc(doc.id)} style={{ padding: "3px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", background: "var(--color-background-danger)", color: "var(--color-text-danger)", border: "1px solid var(--color-border-danger)" }}>Delete</button>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                )}
             </div>
         </div>
     );
@@ -1149,12 +1223,16 @@ function Overview({ models, docs, pyqs }) {
 // ─── MAIN PANEL ───────────────────────────────────────────────────────────────
 export default function AdvancedAdminPanel() {
     const [tab, setTab] = useState("overview");
-    const [models, setModels] = useState(INITIAL_MODELS);
-    const [docs, setDocs] = useState(INITIAL_DOCS);
-    const [pyqs, setPyqs] = useState(INITIAL_PYQS);
-    const [tierConfigs, setTierConfigs] = useState(TIER_CONFIGS_INIT);
-    const [customTags, setCustomTags] = useState([]);
+    const [models, setModels] = useState(() => JSON.parse(localStorage.getItem("admin_models")) || INITIAL_MODELS);
+    const [pyqs, setPyqs] = useState(() => JSON.parse(localStorage.getItem("admin_pyqs")) || INITIAL_PYQS);
+    const [tierConfigs, setTierConfigs] = useState(() => JSON.parse(localStorage.getItem("admin_tiers")) || TIER_CONFIGS_INIT);
+    const [customTags, setCustomTags] = useState(() => JSON.parse(localStorage.getItem("admin_tags")) || []);
     const [toast, setToast] = useState(null);
+
+    useEffect(() => { localStorage.setItem("admin_models", JSON.stringify(models)); }, [models]);
+    useEffect(() => { localStorage.setItem("admin_pyqs", JSON.stringify(pyqs)); }, [pyqs]);
+    useEffect(() => { localStorage.setItem("admin_tiers", JSON.stringify(tierConfigs)); }, [tierConfigs]);
+    useEffect(() => { localStorage.setItem("admin_tags", JSON.stringify(customTags)); }, [customTags]);
 
     const showMsg = (text, isErr = false) => {
         setToast({ text, isErr });
@@ -1193,10 +1271,10 @@ export default function AdvancedAdminPanel() {
                 ))}
             </div>
 
-            {tab === "overview" && <Overview models={models} docs={docs} pyqs={pyqs} />}
+            {tab === "overview" && <Overview models={models} docs={[]} pyqs={pyqs} />}
             {tab === "models" && <ModelStudio models={models} setModels={setModels} customTags={customTags} showMsg={showMsg} />}
             {tab === "behaviors" && <BehaviorTagLibrary customTags={customTags} setCustomTags={setCustomTags} models={models} setModels={setModels} showMsg={showMsg} />}
-            {tab === "rag" && <RagPipeline docs={docs} setDocs={setDocs} showMsg={showMsg} />}
+            {tab === "rag" && <RagPipeline showMsg={showMsg} />}
             {tab === "pyq" && <PyqEngine pyqs={pyqs} setPyqs={setPyqs} showMsg={showMsg} />}
             {tab === "tiers" && <StudentTiers models={models} tierConfigs={tierConfigs} setTierConfigs={setTierConfigs} showMsg={showMsg} />}
 

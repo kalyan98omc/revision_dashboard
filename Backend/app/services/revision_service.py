@@ -655,6 +655,11 @@ Return JSON: {{"score": 0, "is_correct": false, "feedback": "...", "key_takeaway
                 interval_days=days,
             )
             db.session.add(schedule)
+        
+        db.session.commit()
+        log.info("revision_schedule_created", 
+                assessment_id=assessment.id, 
+                schedule_count=len(intervals))
 
     # ── Progress Tracking ─────────────────────────────────────────────────────
 

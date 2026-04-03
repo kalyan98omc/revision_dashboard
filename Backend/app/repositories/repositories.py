@@ -22,6 +22,7 @@ from app.models.models import (
     Quiz, QuizQuestion, UserQuizAttempt,
     ChatSession, ChatMessage, MessageRole,
     AuditLog,
+    QuizTemplate, QuizGeneration, VectorDocument, Document,
 )
 
 
@@ -435,7 +436,7 @@ class ChatRepository(BaseRepository):
             content=content,
             token_count=token_count,
             audio_url=audio_url,
-            metadata=metadata or {},
+            message_metadata=metadata or {},
         )
         db.session.add(msg)
         # Update session token count and last_message_at
@@ -530,3 +531,106 @@ class SubjectRepository(BaseRepository):
         prog.avg_score = ((prog.avg_score or 0) * (n - 1) + new_score) / n
 
         return prog
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  QUIZ TEMPLATE REPOSITORY
+# ─────────────────────────────────────────────────────────────────────────────
+
+class QuizTemplateRepository(BaseRepository):
+    model = QuizTemplate
+
+    @classmethod
+    def find_active(cls, subject_id: Optional[str] = None) -> List[QuizTemplate]:
+        query = db.session.query(QuizTemplate).filter(QuizTemplate.is_active == True)
+        if subject_id:
+            query = query.filter(QuizTemplate.subject_id == subject_id)
+        return query.order_by(QuizTemplate.created_at.desc()).all()
+
+    @classmethod
+    def create(cls, **kwargs) -> QuizTemplate:
+        template = QuizTemplate(**kwargs)
+        db.session.add(template)
+        return template
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  QUIZ GENERATION REPOSITORY
+# ─────────────────────────────────────────────────────────────────────────────
+
+class QuizGenerationRepository(BaseRepository):
+    model = QuizGeneration
+
+    @classmethod
+    def create(cls, **kwargs) -> QuizGeneration:
+        generation = QuizGeneration(**kwargs)
+        db.session.add(generation)
+        return generation
+
+    @classmethod
+    def get_user_generations(cls, user_id: str, limit: int = 20) -> List[QuizGeneration]:
+        return (
+            db.session.query(QuizGeneration)
+            .filter(QuizGeneration.user_id == user_id)
+            .order_by(desc(QuizGeneration.created_at))
+            .limit(limit)
+            .all()
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  VECTOR DOCUMENT REPOSITORY
+# ─────────────────────────────────────────────────────────────────────────────
+
+class VectorDocumentRepository(BaseRepository):
+    model = VectorDocument
+
+    @classmethod
+    def search_by_content(cls, query: str, subject_id: Optional[str] = None, limit: int = 10) -> List[VectorDocument]:
+        # Simple text search - in production, use vector similarity
+        from app.models.models import Document
+        q = db.session.query(VectorDocument).join(Document)
+        if subject_id:
+            q = q.filter(Document.subject_id == subject_id)
+        q = q.filter(VectorDocument.content.ilike(f"%{query}%"))
+        return q.limit(limit).all()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  DOCUMENT REPOSITORY
+# ─────────────────────────────────────────────────────────────────────────────
+
+class DocumentRepository(BaseRepository):
+    model = Document
+
+    @staticmethod
+    def get_by_openai_id(openai_file_id: str) -> Optional[Document]:
+        return db.session.query(Document).filter(
+            Document.openai_file_id == openai_file_id
+        ).first()
+
+    @staticmethod
+    def get_by_vector_store_id(vector_store_id: str) -> Optional[Document]:
+        return db.session.query(Document).filter(
+            Document.vector_store_id == vector_store_id
+        ).first()
+
+    @staticmethod
+    def list_by_subject(subject_id: str, page: int = 1, per_page: int = 20) -> Tuple[List[Document], int]:
+        pagination = (
+            db.session.query(Document)
+            .filter(Document.subject_id == subject_id)
+            .order_by(desc(Document.created_at))
+            .paginate(page=page, per_page=per_page, error_out=False)
+        )
+        return pagination.items, pagination.total
+
+    @staticmethod
+    def list_by_status(status, page: int = 1, per_page: int = 20) -> Tuple[List[Document], int]:
+        pagination = (
+            db.session.query(Document)
+            .filter(Document.status == status)
+            .order_by(desc(Document.created_at))
+            .paginate(page=page, per_page=per_page, error_out=False)
+        )
+        return pagination.items, pagination.total

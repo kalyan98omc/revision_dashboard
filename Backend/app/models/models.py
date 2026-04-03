@@ -103,10 +103,11 @@ class QuestionType(str, enum.Enum):
     MCQ = "mcq"   # Multiple Choice Question
 
 class DocumentStatus(str, enum.Enum):
-    UPLOADING  = "uploading"
-    PROCESSING = "processing"
-    READY      = "ready"
-    FAILED     = "failed"
+    UPLOADING  = "uploading"       # File being saved locally
+    PROCESSING = "processing"      # Uploading to OpenAI
+    INDEXED    = "indexed"         # Successfully stored in vector DB
+    READY      = "ready"           # Legacy: same as INDEXED
+    FAILED     = "failed"          # Upload/processing error
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -836,4 +837,89 @@ class ModelVariantFile(db.Model, TimestampMixin):
             "file_size": self.file_size, "openai_file_id": self.openai_file_id,
             "tags": self.tags or [],
             "created_at": self.created_at.isoformat(),
+        }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  QUIZ ENGINE: AI-GENERATED QUIZZES
+# ─────────────────────────────────────────────────────────────────────────────
+
+class QuizTemplate(db.Model, TimestampMixin):
+    """Templates for generating quizzes from documents."""
+    __tablename__ = "quiz_templates"
+
+    id          = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    name        = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    subject_id  = Column(UUID(as_uuid=False), ForeignKey("subjects.id"), nullable=True)
+    topic_id    = Column(UUID(as_uuid=False), ForeignKey("topics.id"), nullable=True)
+    difficulty  = Column(SAEnum(QuizDifficulty), default=QuizDifficulty.MEDIUM, nullable=False)
+    question_count = Column(SmallInteger, default=10, nullable=False)
+    time_limit_minutes = Column(SmallInteger, default=15, nullable=False)
+    prompt_template = Column(Text, nullable=False)  # Template for OpenAI
+    vector_store_id = Column(String(200), nullable=True)  # Pinecone/Chroma index
+    is_active   = Column(Boolean, default=True, nullable=False)
+    created_by  = Column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=True)
+
+    subject = relationship("Subject")
+    topic   = relationship("Topic")
+    creator = relationship("User")
+    generations = relationship("QuizGeneration", back_populates="template", lazy="dynamic")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "name": self.name, "description": self.description,
+            "subject_id": self.subject_id, "topic_id": self.topic_id,
+            "difficulty": self.difficulty.value, "question_count": self.question_count,
+            "time_limit_minutes": self.time_limit_minutes, "is_active": self.is_active,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
+class QuizGeneration(db.Model, TimestampMixin):
+    """Tracks AI-generated quiz instances."""
+    __tablename__ = "quiz_generations"
+
+    id          = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    template_id = Column(UUID(as_uuid=False), ForeignKey("quiz_templates.id", ondelete="CASCADE"), nullable=False)
+    user_id     = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    quiz_id     = Column(UUID(as_uuid=False), ForeignKey("quizzes.id", ondelete="CASCADE"), nullable=True)
+    status      = Column(SAEnum(DocumentStatus), default=DocumentStatus.PROCESSING, nullable=False)
+    openai_thread_id = Column(String(200), nullable=True)
+    vector_query = Column(Text, nullable=True)  # The query used for vector search
+    generated_content = Column(JSON, nullable=True)  # Raw AI response
+    error_message = Column(Text, nullable=True)
+
+    template = relationship("QuizTemplate", back_populates="generations")
+    user    = relationship("User")
+    quiz    = relationship("Quiz")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "template_id": self.template_id, "user_id": self.user_id,
+            "quiz_id": self.quiz_id, "status": self.status.value,
+            "vector_query": self.vector_query, "error_message": self.error_message,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
+class VectorDocument(db.Model, TimestampMixin):
+    """Vectorized document chunks for RAG."""
+    __tablename__ = "vector_documents"
+
+    id          = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    document_id = Column(UUID(as_uuid=False), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    chunk_index = Column(Integer, nullable=False)
+    content     = Column(Text, nullable=False)
+    embedding   = Column(JSON, nullable=True)  # Vector embedding
+    data_metadata    = Column(JSON, default=dict, nullable=False)  # Page, section, etc.
+    vector_store_id = Column(String(200), nullable=True)  # External vector DB ID
+
+    document = relationship("Document")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "document_id": self.document_id, "chunk_index": self.chunk_index,
+            "content": self.content[:200] + "..." if len(self.content) > 200 else self.content,
+            "metadata": self.data_metadata, "vector_store_id": self.vector_store_id,
         }
