@@ -98,10 +98,10 @@ def _register_blueprints(app: Flask) -> None:
     )
     from app.controllers.admin_controller import admin_bp
     from app.controllers.revision_controller import revision_bp
-    from app.controllers.document_controller import documents_bp
+    from app.socrates import socrates_bp
 
     for blueprint in (auth_bp, user_bp, quiz_bp, quiz_engine_bp, chat_bp, subject_bp,
-                      health_bp, admin_bp, revision_bp, documents_bp):
+                      health_bp, admin_bp, revision_bp, socrates_bp):
         app.register_blueprint(blueprint)
 
 

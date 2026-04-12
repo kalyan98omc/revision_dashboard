@@ -68,13 +68,11 @@ class BaseConfig:
     SOCKETIO_PING_TIMEOUT = 20
     SOCKETIO_PING_INTERVAL = 25
 
-    # ── OpenAI ────────────────────────────────────────────────────────────────
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4-turbo-preview")
-    OPENAI_WHISPER_MODEL: str = os.getenv("OPENAI_WHISPER_MODEL", "whisper-1")
-    OPENAI_TTS_MODEL: str = os.getenv("OPENAI_TTS_MODEL", "tts-1")
-    OPENAI_MAX_TOKENS: int = int(os.getenv("OPENAI_MAX_TOKENS", 1024))
-    OPENAI_TEMPERATURE: float = float(os.getenv("OPENAI_TEMPERATURE", 0.7))
+    # ── Anthropic & Supabase (Socrates Engine) ───────────────────────────────
+    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+    SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
+    SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
+    SOCRATES_SYSTEM_PROMPT: str = os.getenv("SOCRATES_SYSTEM_PROMPT", "You are the Socrates tutor.")
 
     # ── File Upload ───────────────────────────────────────────────────────────
     UPLOAD_FOLDER: str = os.getenv("UPLOAD_FOLDER", "./uploads")

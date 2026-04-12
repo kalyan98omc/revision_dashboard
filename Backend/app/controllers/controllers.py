@@ -628,71 +628,9 @@ def create_realtime_token():
     The frontend uses this short-lived key to connect directly to OpenAI's
     WebSocket endpoint without exposing the main API key in the browser.
     """
-    from flask import current_app
-    import requests as _requests
-
-    api_key = current_app.config.get("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        return jsonify({"error": "OpenAI API key not configured"}), 503
-
-    subject_id = (request.get_json(silent=True) or {}).get("subject_id")
-
-    # Build a tutor-focused system prompt
-    subject_context = ""
-    if subject_id:
-        try:
-            from app.models.models import Subject
-            subj = db.session.get(Subject, subject_id)
-            if subj:
-                subject_context = f" You are currently helping with {subj.name}."
-        except Exception:
-            pass
-
-    system_prompt = (
-        "You are an expert NEET-PG medical AI tutor having a live voice conversation with a student."
-        + subject_context
-        + " Speak in a clear, friendly, encouraging tone. Keep answers concise and well-structured."
-        " Ask the student to repeat if audio is unclear. Use simple language for complex medical concepts."
-    )
-
-    try:
-        resp = _requests.post(
-            "https://api.openai.com/v1/realtime/sessions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "gpt-4o-realtime-preview-2024-12-17",
-                "modalities": ["audio", "text"],
-                "instructions": system_prompt,
-                "voice": "alloy",
-                "input_audio_format": "pcm16",
-                "output_audio_format": "pcm16",
-                "turn_detection": {
-                    "type": "server_vad",
-                    "threshold": 0.5,
-                    "prefix_padding_ms": 300,
-                    "silence_duration_ms": 800,
-                },
-            },
-            timeout=10,
-        )
-        if not resp.ok:
-            log.error("realtime.token_error", status=resp.status_code, body=resp.text)
-            return jsonify({"error": f"OpenAI error: {resp.text}"}), resp.status_code
-
-        data = resp.json()
-        # Return only the ephemeral key and model info — never expose the main key
-        return jsonify({
-            "client_secret": data.get("client_secret"),
-            "session_id": data.get("id"),
-            "model": data.get("model"),
-        }), 200
-
-    except Exception as e:
-        log.error("realtime.token_exception", error=str(e))
-        return jsonify({"error": str(e)}), 500
+    return jsonify({
+        "error": "Realtime audio is currently unsupported in the new Socrates Engine Architecture."
+    }), 503
 
 
 # ─────────────────────────────────────────────────────────────────────────────

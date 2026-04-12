@@ -12,8 +12,7 @@ import uuid
 import structlog
 from typing import Optional
 from datetime import datetime, timezone, timedelta
-
-from openai import OpenAI
+from anthropic import Anthropic
 
 from app.extensions import db
 from app.models.models import (
@@ -28,15 +27,15 @@ log = structlog.get_logger(__name__)
 
 class RevisionService:
 
-    _client: Optional[OpenAI] = None
+    _client: Optional[Anthropic] = None
 
     @classmethod
-    def _get_client(cls) -> OpenAI:
+    def _get_client(cls) -> Anthropic:
         if cls._client is None:
-            api_key = os.getenv("OPENAI_API_KEY")
+            api_key = os.getenv("ANTHROPIC_API_KEY")
             if not api_key:
-                raise ServiceError("OPENAI_API_KEY not configured")
-            cls._client = OpenAI(api_key=api_key)
+                raise ServiceError("ANTHROPIC_API_KEY not configured")
+            cls._client = Anthropic(api_key=api_key)
         return cls._client
 
     # ── Student Profile ───────────────────────────────────────────────────────
@@ -148,18 +147,17 @@ Return JSON format:
 
         try:
             client = cls._get_client()
-            response = client.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-4-turbo-preview"),
+            response = client.messages.create(
+                model="claude-3-5-sonnet-20240620",
+                system="You are a NEET-PG study planning expert. Always return valid JSON only.",
                 messages=[
-                    {"role": "system", "content": "You are a NEET-PG study planning expert. Always return valid JSON only."},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.7,
                 max_tokens=2000,
-                response_format={"type": "json_object"},
             )
 
-            plan = json.loads(response.choices[0].message.content)
+            plan = json.loads(response.content[0].text)
         except Exception as e:
             log.error("study_plan_generation_failed", error=str(e))
             # Fallback: generate a simple plan algorithmically
@@ -274,45 +272,22 @@ Return ONLY valid JSON:
         try:
             client = cls._get_client()
 
-            # Try using assistant with file search for RAG
-            from app.services.admin_service import AdminService
-            try:
-                assistant_id = AdminService._ensure_assistant()
-                thread = client.beta.threads.create()
-                client.beta.threads.messages.create(
-                    thread_id=thread.id,
-                    role="user",
-                    content=prompt,
-                )
-                run = client.beta.threads.runs.create_and_poll(
-                    thread_id=thread.id,
-                    assistant_id=assistant_id,
-                )
-                if run.status == "completed":
-                    messages = client.beta.threads.messages.list(thread_id=thread.id)
-                    content = messages.data[0].content[0].text.value
-                    # Extract JSON from potential markdown code blocks
-                    if "```json" in content:
-                        content = content.split("```json")[1].split("```")[0]
-                    elif "```" in content:
-                        content = content.split("```")[1].split("```")[0]
-                    questions = json.loads(content)
-                else:
-                    raise Exception(f"Assistant run status: {run.status}")
-            except Exception as e:
-                log.warning("assistant_fallback_to_chat", error=str(e))
-                # Fallback to regular chat completion
-                response = client.chat.completions.create(
-                    model=os.getenv("OPENAI_MODEL", "gpt-4-turbo-preview"),
-                    messages=[
-                        {"role": "system", "content": "You are a NEET-PG medical exam expert. Return only valid JSON."},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=0.7,
-                    max_tokens=1500,
-                    response_format={"type": "json_object"},
-                )
-                questions = json.loads(response.choices[0].message.content)
+            response = client.messages.create(
+                model="claude-3-5-sonnet-20240620",
+                system="You are a NEET-PG medical exam expert. Return only valid JSON.",
+                messages=[
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.7,
+                max_tokens=1500,
+            )
+            
+            content = response.content[0].text
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0]
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0]
+            questions = json.loads(content)
 
         except Exception as e:
             log.error("diagnostic_generation_failed", error=str(e))
@@ -404,17 +379,16 @@ Return ONLY valid JSON:
 
         try:
             client = cls._get_client()
-            response = client.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-4-turbo-preview"),
+            response = client.messages.create(
+                model="claude-3-5-sonnet-20240620",
+                system="You are a supportive but honest NEET-PG tutor. Evaluate student answers thoroughly. Return only valid JSON.",
                 messages=[
-                    {"role": "system", "content": "You are a supportive but honest NEET-PG tutor. Evaluate student answers thoroughly. Return only valid JSON."},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.5,
                 max_tokens=2000,
-                response_format={"type": "json_object"},
             )
-            evaluation = json.loads(response.choices[0].message.content)
+            evaluation = json.loads(response.content[0].text)
         except Exception as e:
             log.error("diagnostic_eval_failed", error=str(e))
             # Simple fallback
@@ -477,17 +451,16 @@ Return ONLY valid JSON:
 
         try:
             client = cls._get_client()
-            response = client.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-4-turbo-preview"),
+            response = client.messages.create(
+                model="claude-3-5-sonnet-20240620",
+                system="You are a NEET-PG tutor generating training questions. Return only valid JSON.",
                 messages=[
-                    {"role": "system", "content": "You are a NEET-PG tutor generating training questions. Return only valid JSON."},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.7,
                 max_tokens=1000,
-                response_format={"type": "json_object"},
             )
-            question = json.loads(response.choices[0].message.content)
+            question = json.loads(response.content[0].text)
         except Exception as e:
             log.error("training_question_failed", error=str(e))
             question = {
@@ -555,17 +528,16 @@ Return JSON: {{"score": 0, "is_correct": false, "feedback": "...", "key_takeaway
 
         try:
             client = cls._get_client()
-            response = client.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-4-turbo-preview"),
+            response = client.messages.create(
+                model="claude-3-5-sonnet-20240620",
+                system="You are a supportive NEET-PG tutor. Be encouraging but honest. Return only valid JSON.",
                 messages=[
-                    {"role": "system", "content": "You are a supportive NEET-PG tutor. Be encouraging but honest. Return only valid JSON."},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.5,
                 max_tokens=800,
-                response_format={"type": "json_object"},
             )
-            result = json.loads(response.choices[0].message.content)
+            result = json.loads(response.content[0].text)
         except Exception as e:
             log.error("training_eval_failed", error=str(e))
             result = {"score": 50, "is_correct": False, "feedback": "Unable to evaluate",

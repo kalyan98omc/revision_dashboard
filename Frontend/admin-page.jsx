@@ -148,27 +148,27 @@ const PRESET_BEHAVIOR_TAGS = [
 // ─── MOCK DATA ────────────────────────────────────────────────────────────────
 const INITIAL_MODELS = [
     {
-        id: "m1", name: "NEET PG Core Engine", base_model: "gpt-4o", status: "ready",
+        id: "m1", name: "NEET PG Core Engine", base_model: "claude-sonnet-4-5", status: "ready",
         capabilities: ["diag", "adap", "pyqm", "saq", "mcq", "gap", "highyield"],
         target_levels: ["Weak", "Average", "Good", "Strong"],
         target_goals: ["Top 100", "Top 1000", "Secure Seat"],
         subject_ids: [],
         behavior_tags: ["bt_teacher", "bt_crossq", "bt_pyqhunt"],
         system_prompt: SYSTEM_PROMPT_TEMPLATES.adaptive,
-        file_count: 12, vector_store_id: "vs_abc123", assistant_id: "asst_xyz789",
+        file_count: 12, vector_store_id: null, assistant_id: null,
     },
     {
-        id: "m2", name: "High Achiever Sprint", base_model: "gpt-4o", status: "ready",
+        id: "m2", name: "High Achiever Sprint", base_model: "claude-opus-4-5", status: "ready",
         capabilities: ["adap", "mcq", "case", "img", "highyield", "err", "mastery"],
         target_levels: ["Strong", "Good"],
         target_goals: ["Top 100"],
         subject_ids: [],
         behavior_tags: ["bt_examiner", "bt_devil", "bt_speed", "bt_compare"],
         system_prompt: SYSTEM_PROMPT_TEMPLATES.mastery,
-        file_count: 8, vector_store_id: "vs_def456", assistant_id: "asst_uvw012",
+        file_count: 8, vector_store_id: null, assistant_id: null,
     },
     {
-        id: "m3", name: "Foundation Builder", base_model: "gpt-4-turbo", status: "draft",
+        id: "m3", name: "Foundation Builder", base_model: "claude-haiku-3-5", status: "draft",
         capabilities: ["diag", "saq", "laq", "summ", "gap"],
         target_levels: ["Weak", "Average"],
         target_goals: ["Secure Seat", "Top 1000"],
@@ -262,7 +262,7 @@ const SectionCard = ({ title, subtitle, children, action }) => (
 function ModelStudio({ models, setModels, customTags, showMsg }) {
     const [selected, setSelected] = useState(models[0]?.id || null);
     const [isCreating, setIsCreating] = useState(false);
-    const [draft, setDraft] = useState({ name: "", base_model: "gpt-4o", capabilities: [], target_levels: [], target_goals: [], subject_ids: [], behavior_tags: [], system_prompt: "" });
+    const [draft, setDraft] = useState({ name: "", base_model: "claude-sonnet-4-5", capabilities: [], target_levels: [], target_goals: [], subject_ids: [], behavior_tags: [], system_prompt: "" });
     const fileRef = useRef();
 
     const current = isCreating ? draft : models.find(m => m.id === selected);
@@ -319,7 +319,7 @@ function ModelStudio({ models, setModels, customTags, showMsg }) {
         setModels(ms => [m, ...ms]);
         setSelected(m.id);
         setIsCreating(false);
-        setDraft({ name: "", base_model: "gpt-4o", capabilities: [], target_levels: [], target_goals: [], subject_ids: [], behavior_tags: [], system_prompt: "" });
+        setDraft({ name: "", base_model: "claude-sonnet-4-5", capabilities: [], target_levels: [], target_goals: [], subject_ids: [], behavior_tags: [], system_prompt: "" });
         showMsg("Model variant created");
     };
 
@@ -382,7 +382,7 @@ function ModelStudio({ models, setModels, customTags, showMsg }) {
 
                 {data && (
                     <>
-                        <SectionCard title="Identity" subtitle="Name and base OpenAI model">
+                        <SectionCard title="Identity" subtitle="Name and base Claude (Anthropic) model">
                             <div style={{ display: "flex", gap: 12 }}>
                                 <div style={{ flex: 1 }}>
                                     <label style={{ fontSize: 11, fontWeight: 600, color: "var(--color-text-secondary)", display: "block", marginBottom: 4 }}>VARIANT NAME</label>
@@ -390,11 +390,24 @@ function ModelStudio({ models, setModels, customTags, showMsg }) {
                                         placeholder="e.g. Intensive Revision — Pharmacology"
                                         style={{ width: "100%", padding: "8px 12px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-secondary)", background: "var(--color-background-secondary)", color: "var(--color-text-primary)", fontSize: 13, boxSizing: "border-box" }} />
                                 </div>
-                                <div style={{ width: 180 }}>
-                                    <label style={{ fontSize: 11, fontWeight: 600, color: "var(--color-text-secondary)", display: "block", marginBottom: 4 }}>BASE MODEL</label>
+                                <div style={{ width: 220 }}>
+                                    <label style={{ fontSize: 11, fontWeight: 600, color: "var(--color-text-secondary)", display: "block", marginBottom: 4 }}>BASE MODEL (Claude)</label>
                                     <select value={data.base_model} onChange={e => updateField("base_model", e.target.value)}
                                         style={{ width: "100%", padding: "8px 12px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-secondary)", background: "var(--color-background-secondary)", color: "var(--color-text-primary)", fontSize: 13 }}>
-                                        {["gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"].map(m => <option key={m} value={m}>{m}</option>)}
+                                        <optgroup label="Claude Sonnet (Balanced)">
+                                            <option value="claude-sonnet-4-5">claude-sonnet-4-5 ✦ Recommended</option>
+                                            <option value="claude-3-7-sonnet-20250219">claude-3-7-sonnet (Extended Thinking)</option>
+                                            <option value="claude-3-5-sonnet-20241022">claude-3-5-sonnet</option>
+                                        </optgroup>
+                                        <optgroup label="Claude Opus (Most Capable)">
+                                            <option value="claude-opus-4-5">claude-opus-4-5 ✦ Top Performance</option>
+                                            <option value="claude-3-opus-20240229">claude-3-opus</option>
+                                        </optgroup>
+                                        <optgroup label="Claude Haiku (Fast &amp; Lightweight)">
+                                            <option value="claude-haiku-3-5">claude-haiku-3-5 ✦ Fast</option>
+                                            <option value="claude-3-5-haiku-20241022">claude-3-5-haiku</option>
+                                            <option value="claude-3-haiku-20240307">claude-3-haiku</option>
+                                        </optgroup>
                                     </select>
                                 </div>
                             </div>
@@ -507,7 +520,7 @@ function ModelStudio({ models, setModels, customTags, showMsg }) {
                         </SectionCard>
 
                         <SectionCard title="System Prompt"
-                            subtitle="Core instructions sent to OpenAI with every conversation"
+                            subtitle="Core instructions sent to Claude (Anthropic) with every conversation"
                             action={
                                 <div style={{ display: "flex", gap: 6 }}>
                                     {Object.entries({ diag: "Diagnostic", adap: "Adaptive", master: "Mastery", pyq: "PYQ Focus" }).map(([key, label]) => (
@@ -682,10 +695,10 @@ function RagPipeline({ showMsg }) {
                 style={{ border: `2px dashed ${dragOver ? "var(--color-border-info)" : uploading ? "var(--color-border-warning)" : "var(--color-border-tertiary)"}`, borderRadius: "var(--border-radius-lg)", padding: "32px 20px", textAlign: "center", cursor: uploading ? "wait" : "pointer", marginBottom: 16, transition: "all 0.15s", background: dragOver ? "var(--color-background-info)" : uploading ? "var(--color-background-warning)" : "transparent" }}>
                 <div style={{ fontSize: 24, marginBottom: 8 }}>{uploading ? "⏳" : "📄"}</div>
                 <div style={{ fontSize: 14, fontWeight: 500, color: "var(--color-text-primary)", marginBottom: 4 }}>
-                    {uploading ? "Uploading to OpenAI Vector Store..." : "Drop PDFs / text files here or click to upload"}
+                    {uploading ? "Uploading document for Claude context..." : "Drop PDFs / text files here or click to upload"}
                 </div>
                 <div style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
-                    {uploading ? "Please wait, this may take a moment" : "Files are automatically chunked and vectorized via OpenAI File Search"}
+                    {uploading ? "Please wait, this may take a moment" : "Files are stored locally and used as context in Claude (Anthropic) conversations"}
                 </div>
                 {activeSubject !== "all" && <div style={{ marginTop: 8, fontSize: 12, color: "var(--color-text-info)" }}>Will be tagged to: {SUBJECTS.find(s => s.id === activeSubject)?.name}</div>}
                 <input id="rag-file-input" type="file" multiple accept=".pdf,.txt,.doc,.docx,.csv,.json" style={{ display: "none" }} onChange={e => uploadFiles(e.target.files)} />
