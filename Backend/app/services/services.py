@@ -477,7 +477,7 @@ class ChatService:
             session_id=session.id,
             role=MessageRole.SYSTEM,
             content=system_prompt,
-            metadata={"model": current_app.config["OPENAI_MODEL"]},
+            metadata={"model": "claude-3-5-sonnet-20240620"},
         )
         db.session.commit()
         return session.to_dict()
@@ -539,123 +539,49 @@ class ChatService:
             if m.role in (MessageRole.USER, MessageRole.ASSISTANT)
         ]
 
-        # Stream from OpenAI
+        # Stream from Anthropic
         full_response = ""
         token_count = 0
         finish_reason = "stop"
 
         try:
-            import openai
+            from anthropic import Anthropic
             
             # ── Validate API Key ──
-            api_key = current_app.config.get("OPENAI_API_KEY", "").strip()
+            api_key = current_app.config.get("ANTHROPIC_API_KEY", "").strip()
             if not api_key:
-                log.error("openai.missing_api_key")
-                yield "OpenAI API key is not configured. Please contact admin."
+                log.error("anthropic.missing_api_key")
+                yield "Anthropic API key is not configured. Please contact admin."
                 return
             
-            client = openai.OpenAI(api_key=api_key)
+            client = Anthropic(api_key=api_key)
 
-            if use_rag:
-                # ── Assistants API path: uses file_search on the OpenAI Vector Store ──
-                from app.services.admin_service import AdminService
+            system_instructions = custom_system_prompt or ChatService._build_system_prompt(session.subject_id)
+            anthropic_messages = []
+            for m in history:
+                role = "assistant" if m.role.value == "assistant" else "user"
+                anthropic_messages.append({"role": role, "content": m.content})
 
-                try:
-                    assistant_id = AdminService._ensure_assistant()
-                except Exception as e:
-                    log.error("openai.assistant_initialization_failed", error=str(e), session_id=session_id)
-                    yield "Could not initialize AI assistant. Please try again."
-                    return
-                
-                system_instructions = custom_system_prompt or ChatService._build_system_prompt(session.subject_id)
-
-                # Attach subject-specific vector store to the thread to allow RAG
-                tool_resources = None
-                if session.subject_id:
-                    from app.services.rag_service import RAGService
-                    try:
-                        subject_vs_id = RAGService().get_or_create_vector_store(session.subject_id)
-                        if subject_vs_id:
-                            tool_resources = {
-                                "file_search": {
-                                    "vector_store_ids": [subject_vs_id]
-                                }
-                            }
-                    except Exception as e:
-                        log.warning("openai.vector_store_retrieval_failed", error=str(e), session_id=session_id)
-
-                # Create a thread with the full conversation history
-                try:
-                    thread_params = {"messages": thread_messages}
-                    if tool_resources:
-                        thread_params["tool_resources"] = tool_resources
-                        
-                    thread = client.beta.threads.create(**thread_params)
-                except Exception as e:
-                    log.error("openai.thread_creation_failed", error=str(e), session_id=session_id)
-                    yield "Could not create conversation thread. Please try again."
-                    return
-
-                try:
-                    # Stream the assistant run
-                    with client.beta.threads.runs.stream(
-                        thread_id=thread.id,
-                        assistant_id=assistant_id,
-                        instructions=system_instructions,
-                        tool_choice={"type": "file_search"},
-                    ) as stream:
-                        for event in stream:
-                            if event.event == "thread.message.delta":
-                                for block in (event.data.delta.content or []):
-                                    if block.type == "text" and block.text and block.text.value:
-                                        chunk = block.text.value
-                                        full_response += chunk
-                                        yield chunk
-                            elif event.event == "thread.run.completed":
-                                finish_reason = "stop"
-                            elif event.event == "thread.run.failed":
-                                finish_reason = "error"
-                except Exception as e:
-                    log.error("openai.stream_run_failed", error=str(e), session_id=session_id)
-                    yield "AI response failed. Please try again."
-                finally:
-                    # Clean up thread — ignore errors
-                    try:
-                        client.beta.threads.delete(thread.id)
-                    except Exception:
-                        pass
-
-            else:
-                # ── Fallback: standard chat completions (no file_search / RAG) ──
-                try:
-                    openai_messages = [
-                        {"role": m.role.value, "content": m.content}
-                        for m in history
-                    ]
-                    stream = client.chat.completions.create(
-                        model=current_app.config["OPENAI_MODEL"],
-                        messages=openai_messages,
-                        max_tokens=current_app.config["OPENAI_MAX_TOKENS"],
-                        temperature=current_app.config["OPENAI_TEMPERATURE"],
-                        stream=True,
-                    )
-                    for chunk in stream:
-                        delta = chunk.choices[0].delta
-                        if delta.content:
-                            full_response += delta.content
-                            yield delta.content
-                        if chunk.choices[0].finish_reason:
-                            finish_reason = chunk.choices[0].finish_reason
-                except Exception as e:
-                    log.error("openai.chat_completion_failed", error=str(e), session_id=session_id)
-                    yield "Chat completion failed. Please try again."
-                    return
+            try:
+                with client.messages.stream(
+                    max_tokens=1024,
+                    model="claude-3-5-sonnet-20240620",
+                    system=system_instructions,
+                    messages=anthropic_messages,
+                ) as stream:
+                    for text_chunk in stream.text_stream:
+                        full_response += text_chunk
+                        yield text_chunk
+            except Exception as e:
+                log.error("anthropic.chat_completion_failed", error=str(e), session_id=session_id)
+                yield "Chat completion failed. Please try again."
+                return
 
             # Approximate token count
             token_count = len(full_response.split()) * 1.3
 
         except Exception as e:
-            log.error("openai.stream_error", error=str(e), error_type=type(e).__name__, session_id=session_id)
+            log.error("anthropic.stream_error", error=str(e), error_type=type(e).__name__, session_id=session_id)
             fallback = "I'm having trouble connecting to the AI service right now. Please try again in a moment."
             full_response = fallback
             yield fallback
@@ -666,7 +592,7 @@ class ChatService:
             role=MessageRole.ASSISTANT,
             content=full_response,
             token_count=int(token_count),
-            metadata={"model": current_app.config["OPENAI_MODEL"], "finish_reason": finish_reason},
+            metadata={"model": "claude-3-5-sonnet-20240620", "finish_reason": finish_reason},
         )
 
         # Auto-title the session from first user message
@@ -687,21 +613,11 @@ class ChatService:
             raise NotFoundError("Session not found")
 
         try:
-            import openai
-            import io
-            client = openai.OpenAI(api_key=current_app.config["OPENAI_API_KEY"])
-            audio_file = io.BytesIO(audio_bytes)
-            audio_file.name = filename
-
-            transcript = client.audio.transcriptions.create(
-                model=current_app.config["OPENAI_WHISPER_MODEL"],
-                file=audio_file,
-                response_format="text",
-            )
-            return {"transcript": transcript.strip()}
+            # Anthropic doesn't have an audio transcription API yet, stubbing this out
+            return {"transcript": "Audio transcription is currently unsupported on Anthropic models."}
 
         except Exception as e:
-            log.error("whisper.transcription_error", error=str(e))
+            log.error("transcription_error", error=str(e))
             raise ServiceError("Audio transcription failed. Please try again.")
 
     @staticmethod

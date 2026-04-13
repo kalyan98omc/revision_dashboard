@@ -787,7 +787,7 @@ class ModelVariant(db.Model, TimestampMixin):
     id              = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
     name            = Column(String(200), nullable=False)
     description     = Column(Text, nullable=True)
-    base_model      = Column(String(100), default="gpt-4o", nullable=False)
+    base_model      = Column(String(100), default="claude-sonnet-4-5", nullable=False)
     system_prompt   = Column(Text, nullable=True)
     vector_store_id = Column(String(200), nullable=True)     # OpenAI vector store ID
     assistant_id    = Column(String(200), nullable=True)     # OpenAI assistant ID

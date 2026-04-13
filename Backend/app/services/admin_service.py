@@ -11,7 +11,7 @@ import structlog
 from typing import Optional
 from datetime import datetime, timezone
 
-from openai import OpenAI
+
 
 from app.extensions import db
 from app.models.models import (
@@ -29,88 +29,8 @@ log = structlog.get_logger(__name__)
 
 class AdminService:
 
-    _client: Optional[OpenAI] = None
-    _vector_store_id: Optional[str] = None
-    _assistant_id: Optional[str] = None
-
-    # ── OpenAI Client ─────────────────────────────────────────────────────────
-
-    @classmethod
-    def _get_client(cls) -> OpenAI:
-        if cls._client is None:
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                raise ServiceError("OPENAI_API_KEY not configured")
-            cls._client = OpenAI(api_key=api_key)
-        return cls._client
-
-    @classmethod
-    def _ensure_vector_store(cls) -> str:
-        """Get or create the NEET-PG vector store."""
-        if cls._vector_store_id:
-            return cls._vector_store_id
-
-        client = cls._get_client()
-        # Check if a vector store already exists
-        stores = client.beta.vector_stores.list(limit=100)
-        for store in stores.data:
-            if store.name == "neetpg-revision-docs":
-                cls._vector_store_id = store.id
-                return cls._vector_store_id
-
-        # Create new vector store
-        store = client.beta.vector_stores.create(name="neetpg-revision-docs")
-        cls._vector_store_id = store.id
-        log.info("created_vector_store", store_id=store.id)
-        return cls._vector_store_id
-
-    @classmethod
-    def _ensure_assistant(cls) -> str:
-        """Get or create the NEET-PG AI assistant with file search enabled."""
-        client = cls._get_client()
-        vector_store_id = cls._ensure_vector_store()
-
-        # Check if assistant already exists
-        assistants = client.beta.assistants.list(limit=100)
-        for a in assistants.data:
-            if a.name == "NEET-PG Revision Assistant":
-                # Always ensure the current vector store is attached
-                client.beta.assistants.update(
-                    a.id,
-                    tool_resources={
-                        "file_search": {"vector_store_ids": [vector_store_id]}
-                    },
-                )
-                cls._assistant_id = a.id
-                return cls._assistant_id
-
-        # Create new assistant
-        assistant = client.beta.assistants.create(
-            name="NEET-PG Revision Assistant",
-            instructions="""You are an expert NEET-PG medical exam tutor. You have access to uploaded 
-study materials, previous year questions, and medical textbooks through file search.
-
-Your role is to:
-1. Generate diagnostic questions (SAQs) to assess student readiness on a topic
-2. Evaluate student answers with detailed, constructive feedback
-3. Identify knowledge gaps and confusion patterns
-4. Generate training questions (SAQ → LAQ → MCQ) adapted to student level
-5. Determine topic mastery based on cumulative performance
-6. Provide explanations referencing the uploaded study materials
-
-Always be encouraging but honest. Reference specific concepts from the uploaded documents.
-Use clinical correlations when relevant. Format responses clearly with headers and bullet points.""",
-            model=os.getenv("OPENAI_MODEL", "gpt-4o"),
-            tools=[{"type": "file_search"}],
-            tool_resources={
-                "file_search": {
-                    "vector_store_ids": [vector_store_id]
-                }
-            },
-        )
-        cls._assistant_id = assistant.id
-        log.info("created_assistant", assistant_id=assistant.id)
-        return cls._assistant_id
+    # OpenAI integration removed as per Socrates architecture.
+    pass
 
     # ── Document Upload ───────────────────────────────────────────────────────
 
@@ -161,32 +81,9 @@ Use clinical correlations when relevant. Format responses clearly with headers a
         db.session.add(doc)
         db.session.flush()
 
-        # Upload to OpenAI
-        try:
-            client = AdminService._get_client()
-            vector_store_id = AdminService._ensure_vector_store()
-
-            # Upload file to OpenAI
-            with open(file_path, "rb") as f:
-                oai_file = client.files.create(file=f, purpose="assistants")
-
-            doc.openai_file_id = oai_file.id
-
-            # Add to vector store
-            vs_file = client.beta.vector_stores.files.create(
-                vector_store_id=vector_store_id,
-                file_id=oai_file.id,
-            )
-
-            doc.vector_store_id = vector_store_id
-            doc.status = DocumentStatus.INDEXED
-            log.info("document_indexed_to_vector_store",
-                     doc_id=doc.id, file_id=oai_file.id, vs_file_id=vs_file.id)
-
-        except Exception as e:
-            doc.status = DocumentStatus.FAILED
-            doc.error_message = str(e)
-            log.error("openai_upload_failed", doc_id=doc.id, error=str(e))
+        # RAG is disabled; documents are stored locally only
+        doc.status = DocumentStatus.INDEXED
+        log.info("document_stored", doc_id=doc.id)
 
         db.session.commit()
         return doc.to_dict()
@@ -215,21 +112,7 @@ Use clinical correlations when relevant. Format responses clearly with headers a
         if not doc:
             raise NotFoundError("Document not found")
 
-        # Remove from OpenAI
-        try:
-            if doc.openai_file_id:
-                client = AdminService._get_client()
-                if doc.vector_store_id:
-                    try:
-                        client.beta.vector_stores.files.delete(
-                            vector_store_id=doc.vector_store_id,
-                            file_id=doc.openai_file_id,
-                        )
-                    except Exception:
-                        pass
-                client.files.delete(doc.openai_file_id)
-        except Exception as e:
-            log.warning("openai_delete_failed", doc_id=doc_id, error=str(e))
+        # RAG is disabled, so no OpenAI cleanup needed.
 
         # Remove local file
         if os.path.exists(doc.file_path):
@@ -254,33 +137,10 @@ Use clinical correlations when relevant. Format responses clearly with headers a
         doc.error_message = None
         db.session.commit()
 
-        try:
-            client = AdminService._get_client()
-            vector_store_id = AdminService._ensure_vector_store()
-
-            # Upload file to OpenAI (may overwrite if file_id exists)
-            with open(doc.file_path, "rb") as f:
-                oai_file = client.files.create(file=f, purpose="assistants")
-
-            doc.openai_file_id = oai_file.id
-
-            # Add to vector store
-            vs_file = client.beta.vector_stores.files.create(
-                vector_store_id=vector_store_id,
-                file_id=oai_file.id,
-            )
-
-            doc.vector_store_id = vector_store_id
-            doc.status = DocumentStatus.INDEXED
-            doc.error_message = None
-            log.info("document_retry_successful",
-                     doc_id=doc.id, file_id=oai_file.id, vs_file_id=vs_file.id)
-
-        except Exception as e:
-            doc.status = DocumentStatus.FAILED
-            doc.error_message = str(e)
-            log.error("document_retry_failed", doc_id=doc.id, error=str(e))
-            raise ServiceError(f"Retry failed: {str(e)}")
+        # Vector store uploading removed
+        doc.status = DocumentStatus.INDEXED
+        doc.error_message = None
+        log.info("document_retry_successful_local", doc_id=doc.id)
 
         db.session.commit()
         return doc.to_dict()
@@ -297,58 +157,16 @@ Use clinical correlations when relevant. Format responses clearly with headers a
         # Check if file exists on disk
         status_info["file_exists_locally"] = os.path.exists(doc.file_path)
 
-        # If document has an OpenAI file ID, check status there
-        if doc.openai_file_id:
-            try:
-                client = AdminService._get_client()
-                oai_file = client.files.retrieve(doc.openai_file_id)
-                status_info["openai_file_status"] = oai_file.status if hasattr(oai_file, 'status') else "active"
-                status_info["openai_file_size"] = oai_file.size if hasattr(oai_file, 'size') else doc.file_size_bytes
-            except Exception as e:
-                status_info["openai_file_status"] = "error_checking"
-                status_info["openai_check_error"] = str(e)
-                log.warning("openai_file_check_failed", doc_id=doc.id, error=str(e))
-
-        # If document is in vector store, check vector store status
-        if doc.vector_store_id:
-            try:
-                client = AdminService._get_client()
-                vs_file = client.beta.vector_stores.files.retrieve(
-                    vector_store_id=doc.vector_store_id,
-                    file_id=doc.openai_file_id,
-                )
-                status_info["vector_store_file_status"] = vs_file.status
-                status_info["vector_store_chunks"] = vs_file.chunks_processed if hasattr(vs_file, 'chunks_processed') else None
-            except Exception as e:
-                # File might not exist in vector store if upload failed
-                status_info["vector_store_file_status"] = "not_found"
-                status_info["vector_store_check_error"] = str(e)
-
+        # OpenAI / Vector checks removed
         return status_info
 
     @staticmethod
     def verify_vector_store_connection() -> dict:
         """Verify connection to OpenAI vector store."""
-        try:
-            client = AdminService._get_client()
-            vector_store_id = AdminService._ensure_vector_store()
-            
-            # Get vector store details
-            vs = client.beta.vector_stores.retrieve(vector_store_id)
-            
-            return {
-                "connected": True,
-                "vector_store_id": vector_store_id,
-                "vector_store_name": vs.name if hasattr(vs, 'name') else "unknown",
-                "file_count": vs.file_counts.total if hasattr(vs, 'file_counts') else 0,
-                "processing_count": vs.file_counts.in_progress if hasattr(vs, 'file_counts') else 0,
-            }
-        except Exception as e:
-            log.error("vector_store_verification_failed", error=str(e))
-            return {
-                "connected": False,
-                "error": str(e),
-            }
+        return {
+            "connected": False,
+            "error": "Vector store is disabled in Socrates Architecture",
+        }
 
     # ── Topic Management ──────────────────────────────────────────────────────
 
@@ -724,7 +542,7 @@ Use clinical correlations when relevant. Format responses clearly with headers a
             id=str(uuid.uuid4()),
             name=data["name"],
             description=data.get("description"),
-            base_model=data.get("base_model", "gpt-4o"),
+            base_model=data.get("base_model", "claude-sonnet-4-5"),
             system_prompt=data.get("system_prompt"),
             status=ModelVariantStatus.DRAFT,
             tags=data.get("tags", []),
@@ -780,23 +598,13 @@ Use clinical correlations when relevant. Format responses clearly with headers a
         file_storage.save(file_path)
         file_size = os.path.getsize(file_path)
 
-        openai_file_id = None
-        try:
-            client = AdminService._get_client()
-            with open(file_path, "rb") as f:
-                oai_file = client.files.create(file=f, purpose="assistants")
-            openai_file_id = oai_file.id
-
-            if variant.vector_store_id:
-                client.beta.vector_stores.files.create(
-                    vector_store_id=variant.vector_store_id, file_id=oai_file.id)
-        except Exception as e:
-            log.warning("variant_file_upload_failed", error=str(e))
+        # Vector store disabled
+        pass
 
         vf = ModelVariantFile(
             id=str(uuid.uuid4()), variant_id=variant_id,
             filename=original_name, file_path=file_path,
-            file_size=file_size, openai_file_id=openai_file_id,
+            file_size=file_size, openai_file_id=None,
             tags=tags or [],
         )
         db.session.add(vf)
@@ -831,35 +639,8 @@ Use clinical correlations when relevant. Format responses clearly with headers a
             raise NotFoundError("Model variant not found")
 
         try:
-            client = AdminService._get_client()
-            variant.status = ModelVariantStatus.TRAINING
-            db.session.commit()
-
-            # Create vector store if needed
-            if not variant.vector_store_id:
-                store = client.beta.vector_stores.create(name=f"variant-{variant.name}")
-                variant.vector_store_id = store.id
-
-            # Upload all files to vector store
-            files = ModelVariantFile.query.filter_by(variant_id=variant_id).all()
-            for vf in files:
-                if vf.openai_file_id and not vf.document_id:
-                    try:
-                        client.beta.vector_stores.files.create(
-                            vector_store_id=variant.vector_store_id,
-                            file_id=vf.openai_file_id)
-                    except Exception:
-                        pass
-
-            # Create assistant
-            assistant = client.beta.assistants.create(
-                name=f"NEET-PG: {variant.name}",
-                instructions=variant.system_prompt or "You are a NEET-PG medical exam tutor.",
-                model=variant.base_model,
-                tools=[{"type": "file_search"}],
-                tool_resources={"file_search": {"vector_store_ids": [variant.vector_store_id]}},
-            )
-            variant.assistant_id = assistant.id
+            # Under new Socrates Architecture, we don't deploy to OpenAI.
+            # Local storage forms Anthropic contexts dynamically.
             variant.status = ModelVariantStatus.READY
             db.session.commit()
             return variant.to_dict()

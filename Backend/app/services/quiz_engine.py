@@ -14,7 +14,7 @@ from typing import Optional, List, Dict, Any
 
 import structlog
 from flask import current_app
-import openai
+from anthropic import Anthropic
 from sentence_transformers import SentenceTransformer
 
 from app.extensions import db
@@ -84,8 +84,8 @@ class QuizEngineService:
             vector_query = custom_query or QuizEngineService._build_vector_query(template)
             relevant_docs = QuizEngineService._search_vectors(vector_query, template.subject_id, limit=5)
 
-            # Generate quiz using OpenAI
-            quiz_data = QuizEngineService._generate_with_openai(template, relevant_docs, vector_query)
+            # Generate quiz using Anthropic
+            quiz_data = QuizEngineService._generate_with_anthropic(template, relevant_docs, vector_query)
 
             # Create the quiz
             quiz = QuizEngineService._create_quiz_from_generation(template, quiz_data, user_id)
@@ -128,13 +128,13 @@ class QuizEngineService:
         return [doc.to_dict() for doc in docs]
 
     @staticmethod
-    def _generate_with_openai(
+    def _generate_with_anthropic(
         template: QuizTemplate,
         relevant_docs: List[Dict],
         vector_query: str,
     ) -> Dict:
-        """Generate quiz using OpenAI API."""
-        client = openai.OpenAI(api_key=current_app.config.get("OPENAI_API_KEY"))
+        """Generate quiz using Anthropic API."""
+        client = Anthropic(api_key=current_app.config.get("ANTHROPIC_API_KEY"))
 
         # Build context from relevant documents
         context = "\n\n".join([doc["content"] for doc in relevant_docs])
@@ -148,18 +148,27 @@ class QuizEngineService:
             query=vector_query,
         )
 
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are an expert educator creating high-quality quizzes."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7,
-            max_tokens=4000,
-        )
-
-        content = response.choices[0].message.content
-        return json.loads(content)  # Assume structured JSON response
+        try:
+            response = client.messages.create(
+                model="claude-3-5-sonnet-20240620",
+                system="You are an expert educator creating high-quality quizzes. Return ONLY valid JSON.",
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=4000,
+            )
+            
+            content = response.content[0].text
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0]
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0]
+                
+            return json.loads(content)
+        except Exception as e:
+            log.error("anthropic_quiz_generation_failed", error=str(e))
+            raise
 
     @staticmethod
     def _create_quiz_from_generation(

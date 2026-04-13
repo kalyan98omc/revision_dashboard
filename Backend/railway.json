@@ -1,0 +1,8 @@
+{
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "startCommand": "gunicorn \"wsgi:application\" --worker-class eventlet -w 4 --bind 0.0.0.0:$PORT"
+  }
+}
