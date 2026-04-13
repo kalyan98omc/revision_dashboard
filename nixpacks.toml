@@ -1,4 +1,3 @@
-
 [phases.setup]
 nixPkgs = [
   "python311",
@@ -13,10 +12,7 @@ nixPkgs = [
 
 [phases.install]
 cmds = [
-  "cd Backend",
-  "python3.11 -m venv .venv",
-  ". .venv/bin/activate",
-  "pip install -r requirements.txt"
+  "cd Backend && python3.11 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt"
 ]
 
 [start]
