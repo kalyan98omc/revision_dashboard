@@ -2,7 +2,7 @@
 nixPkgs = ["python311", "file"]   # python + libmagic
 
 [phases.install]
-cmds = ["pip install -r Backend/requirements.txt"]
+cmds = ["python3.11 -m pip install -r requirements.txt"]
 
 [start]
 cmd = "bash start.sh"
