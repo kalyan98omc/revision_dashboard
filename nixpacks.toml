@@ -1,8 +1,21 @@
 [phases.setup]
-nixPkgs = ["python311", "file"]   # python + libmagic
+nixPkgs = [
+  "python311",
+  "file",
+  "gcc",
+  "openssl",
+  "libffi",
+]
 
 [phases.install]
-cmds = ["python3.11 -m pip install -r requirements.txt"]
+cmds = [
+  "cd Backend",
+  "python3.11 -m pip install --upgrade pip setuptools wheel",
+  "python3.11 -m pip install -r requirements.txt"
+]
 
 [start]
-cmd = "bash start.sh"
+cmd = "cd Backend && bash ../start.sh"
+
+[variables]
+PYTHONUNBUFFERED = "1"
