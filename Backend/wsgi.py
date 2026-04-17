@@ -13,7 +13,7 @@ if "celery" not in sys.argv[0]:
 
 from celery import Celery as _Celery
 from app import create_app
-from app.extensions import db, socketio
+from app.extensions import socketio
 
 
 def make_celery(flask_app):
@@ -36,10 +36,7 @@ def make_celery(flask_app):
 
 flask_app = create_app()
 
-# ── Create all database tables automatically ─────────────────────────────────
-with flask_app.app_context():
-    import app.models.models  # noqa: F401 — ensure all models are imported
-    db.create_all()
+
 
 # Expose as 'application' for gunicorn / uWSGI
 application = flask_app
